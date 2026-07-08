@@ -24,6 +24,7 @@ from PySide6.QtGui import (
     QAction, QColor, QFont, QImage, QKeySequence, QLinearGradient, QPainter,
     QPainterPath, QPixmap, QPolygonF,
 )
+from PySide6.QtCore import QMimeData
 from PySide6.QtCore import QPoint, QPointF, QRect
 from PySide6.QtGui import QIcon
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -83,6 +84,13 @@ QLabel#range { font-family: 'Cascadia Mono', 'Consolas', monospace; color: #8fd6
 QLabel#drop { color: #7a7a82; font-size: 12pt; background: #0d0d0f; }
 QStatusBar { background: #1b1b1e; color: #8a8a92; }
 """
+
+
+def copy_file_to_clipboard(path: str):
+    """Put the file itself on the clipboard (paste into Discord uploads it)."""
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(path)])
+    QApplication.clipboard().setMimeData(mime)
 
 
 def fmt_ms(ms: int) -> str:
@@ -717,11 +725,14 @@ class Trimmer(QMainWindow):
         self._gif_reset()
         limit = self.discord_limit()
         if fits:
-            self.statusBar().showMessage(f"GIF saved: {path} ({size_mb:.1f} MB)")
+            copy_file_to_clipboard(path)
+            self.statusBar().showMessage(
+                f"GIF saved + copied to clipboard ({size_mb:.1f} MB)")
             QMessageBox.information(
                 self, "mp4trim",
                 f"GIF saved ({size_mb:.1f} MB — fits your "
-                f"{limit:.0f} MB Discord limit):\n{path}")
+                f"{limit:.0f} MB Discord limit) and copied to clipboard — "
+                f"paste straight into Discord.\n{path}")
         else:
             self.statusBar().showMessage(f"GIF saved but large: {size_mb:.1f} MB")
             QMessageBox.warning(
@@ -803,8 +814,12 @@ class Trimmer(QMainWindow):
         self.btn_trim.setEnabled(True)
         self.btn_trim.setText("✂ Trim MP4")
         if code == 0:
-            self.statusBar().showMessage(f"Saved: {dst}")
-            QMessageBox.information(self, "mp4trim", f"Saved:\n{dst}")
+            copy_file_to_clipboard(str(dst))
+            self.statusBar().showMessage(f"Saved + copied to clipboard: {dst}")
+            QMessageBox.information(
+                self, "mp4trim",
+                f"Saved and copied to clipboard — paste straight into "
+                f"Discord or Explorer.\n{dst}")
         else:
             self.statusBar().showMessage("Trim failed")
             QMessageBox.critical(self, "mp4trim",

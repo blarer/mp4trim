@@ -39,6 +39,8 @@ Dolby Vision metadata. mp4trim avoids both:
   upload limit — pick your tier under **Options → Discord upload
   limit** (Free 10 MB / Nitro Basic 50 MB / Nitro 500 MB, remembered
   between runs). Nitro tiers start at 720px/24fps for crisper GIFs.
+- **Auto-copy**: finished GIFs and trimmed MP4s land on your clipboard
+  as files — Ctrl+V straight into Discord.
 
 Every action is a visible button — no shortcuts to memorize:
 
