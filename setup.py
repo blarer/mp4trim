@@ -7,11 +7,13 @@
 from cx_Freeze import Executable, setup
 
 build_exe_options = {
-    "packages": ["PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"],
+    "packages": [
+        "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
+        "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets",
+    ],
     "excludes": [
         "tkinter", "unittest", "email", "http", "xmlrpc", "pydoc", "test",
-        "PySide6.QtNetwork", "PySide6.QtQml", "PySide6.QtQuick",
-        "PySide6.QtOpenGL", "PySide6.QtDBus", "PySide6.QtPdf",
+        "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtDBus", "PySide6.QtPdf",
     ],
 }
 
@@ -24,7 +26,7 @@ bdist_msi_options = {
 
 setup(
     name="mp4trim",
-    version="1.0.0",
+    version="1.1.0",
     description="Simple MP4 trimmer - stream copy, hybrid DV/HDR10 safe",
     options={"build_exe": build_exe_options, "bdist_msi": bdist_msi_options},
     executables=[
