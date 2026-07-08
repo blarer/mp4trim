@@ -17,7 +17,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QRectF, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QProcess, QRectF, QSettings, Qt, QThread, QTimer, QUrl, Signal,
+)
 from PySide6.QtGui import (
     QAction, QColor, QFont, QImage, QKeySequence, QLinearGradient, QPainter,
     QPainterPath, QPixmap, QPolygonF,
@@ -31,8 +33,9 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "1.3.0"
-DISCORD_LIMIT_MB = 10.0
+APP_VERSION = "1.4.0"
+DISCORD_TIERS = [("Free — 10 MB", 10.0), ("Nitro Basic — 50 MB", 50.0),
+                 ("Nitro — 500 MB", 500.0)]
 
 
 def res_path(name: str) -> Path:
@@ -257,14 +260,20 @@ class GifWorker(QThread):
 
     LADDER = [(480, 20), (480, 15), (400, 15), (360, 12),
               (320, 12), (280, 10), (240, 10)]
+    # extra headroom at 50/500 MB buys bigger, smoother rungs first
+    HQ_LADDER = [(720, 24), (640, 24), (560, 20)]
 
-    def __init__(self, src: str, t_in: int, t_out: int, dst: str):
+    def __init__(self, src: str, t_in: int, t_out: int, dst: str,
+                 limit_mb: float):
         super().__init__()
         self.src, self.t_in, self.t_out, self.dst = src, t_in, t_out, dst
+        self.limit_mb = limit_mb
 
     def run(self):
         size_mb = 0.0
-        for i, (width, fps) in enumerate(self.LADDER, 1):
+        ladder = (self.HQ_LADDER + self.LADDER if self.limit_mb > 10
+                  else self.LADDER)
+        for i, (width, fps) in enumerate(ladder, 1):
             self.progress.emit(
                 f"GIF pass {i}/{len(self.LADDER)}: {width}px @ {fps}fps …")
             flt = (f"[0:v] fps={fps},scale={width}:-1:flags=lanczos,"
@@ -281,7 +290,7 @@ class GifWorker(QThread):
                 self.failed.emit(r.stderr.decode(errors="replace")[-1500:])
                 return
             size_mb = Path(self.dst).stat().st_size / 1_048_576
-            if size_mb <= DISCORD_LIMIT_MB:
+            if size_mb <= self.limit_mb:
                 self.done.emit(self.dst, size_mb, True)
                 return
         self.done.emit(self.dst, size_mb, False)
@@ -413,6 +422,7 @@ class Trimmer(QMainWindow):
         self.duration = 0
         self.position = 0
         self.proc: QProcess | None = None
+        self.settings = QSettings("mp4trim", "mp4trim")
         self.gif_worker: GifWorker | None = None
         self.fallback = False   # True -> ffmpeg frame preview, no playback
         self._prime = False     # pause right after load to show first frame
@@ -523,6 +533,17 @@ class Trimmer(QMainWindow):
             "Force ffmpeg preview (no playback)", self, checkable=True,
             toggled=self.on_force_fallback)
         m_opts.addActions([self.act_reencode, self.act_ffpreview])
+
+        m_opts.addSeparator()
+        m_tier = m_opts.addMenu("Discord upload limit (GIF)")
+        saved = float(self.settings.value("discord_limit", 10.0))
+        self.tier_actions = []
+        for name, mb in DISCORD_TIERS:
+            act = QAction(name, self, checkable=True, checked=(mb == saved))
+            act.triggered.connect(
+                lambda _=False, v=mb: self.set_discord_limit(v))
+            m_tier.addAction(act)
+            self.tier_actions.append((act, mb))
 
         m_help = self.menuBar().addMenu("&Help")
         m_help.addAction(QAction(
@@ -651,6 +672,15 @@ class Trimmer(QMainWindow):
             f"{Path(self.path).stem}_{self.position // 1000}s.png"))
         SnapshotDialog(img, default, self).exec()
 
+    def discord_limit(self) -> float:
+        return float(self.settings.value("discord_limit", 10.0))
+
+    def set_discord_limit(self, mb: float):
+        self.settings.setValue("discord_limit", mb)
+        for act, v in self.tier_actions:
+            act.setChecked(v == mb)
+        self.statusBar().showMessage(f"GIF target: {mb:.0f} MB")
+
     def export_gif(self):
         if not self.path or getattr(self, "gif_worker", None):
             return
@@ -658,7 +688,7 @@ class Trimmer(QMainWindow):
         if t_out - t_in < 100:
             QMessageBox.warning(self, "mp4trim", "In/out range is empty.")
             return
-        if t_out - t_in > 60_000:
+        if self.discord_limit() <= 10 and t_out - t_in > 60_000:
             if QMessageBox.question(
                     self, "mp4trim",
                     "Selection is over a minute — GIFs that long get huge "
@@ -671,7 +701,8 @@ class Trimmer(QMainWindow):
         self.player.pause()
         self.btn_gif.setEnabled(False)
         self.btn_gif.setText("Encoding…")
-        self.gif_worker = GifWorker(self.path, t_in, t_out, str(dst))
+        self.gif_worker = GifWorker(self.path, t_in, t_out, str(dst),
+                                    self.discord_limit())
         self.gif_worker.progress.connect(self.statusBar().showMessage)
         self.gif_worker.done.connect(self.gif_done)
         self.gif_worker.failed.connect(self.gif_failed)
@@ -684,18 +715,19 @@ class Trimmer(QMainWindow):
 
     def gif_done(self, path: str, size_mb: float, fits: bool):
         self._gif_reset()
+        limit = self.discord_limit()
         if fits:
             self.statusBar().showMessage(f"GIF saved: {path} ({size_mb:.1f} MB)")
             QMessageBox.information(
                 self, "mp4trim",
-                f"GIF saved ({size_mb:.1f} MB — fits Discord's "
-                f"{DISCORD_LIMIT_MB:.0f} MB limit):\n{path}")
+                f"GIF saved ({size_mb:.1f} MB — fits your "
+                f"{limit:.0f} MB Discord limit):\n{path}")
         else:
             self.statusBar().showMessage(f"GIF saved but large: {size_mb:.1f} MB")
             QMessageBox.warning(
                 self, "mp4trim",
                 f"GIF saved, but even at lowest quality it is "
-                f"{size_mb:.1f} MB (over Discord's {DISCORD_LIMIT_MB:.0f} MB). "
+                f"{size_mb:.1f} MB (over your {limit:.0f} MB Discord limit). "
                 f"Trim a shorter range for a smaller file.\n{path}")
 
     def gif_failed(self, err: str):

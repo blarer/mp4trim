@@ -35,8 +35,10 @@ Dolby Vision metadata. mp4trim avoids both:
   by ffmpeg, so colors are right), then drag to crop and copy to
   clipboard or save as PNG.
 - **GIF for Discord**: one click turns the selected range into a GIF,
-  automatically stepping down size/framerate until it fits Discord's
-  10 MB upload limit.
+  automatically stepping down size/framerate until it fits your Discord
+  upload limit — pick your tier under **Options → Discord upload
+  limit** (Free 10 MB / Nitro Basic 50 MB / Nitro 500 MB, remembered
+  between runs). Nitro tiers start at 720px/24fps for crisper GIFs.
 
 Every action is a visible button — no shortcuts to memorize:
 
@@ -101,9 +103,10 @@ python setup.py bdist_msi
   start can land a few seconds early. **Options → Frame-accurate**
   re-encodes video (x264 CRF 18) for exact cuts — but that drops Dolby
   Vision metadata, so leave it off for hybrid files.
-- GIF export tries 480px/20fps first and steps down through 7 quality
-  rungs until the file fits 10 MB. Keep selections under ~30 s for
-  crisp results; over a minute rarely fits even at minimum quality.
+- GIF export steps down through quality rungs (720px/24fps →
+  240px/10fps) until the file fits your Discord tier. On the free
+  10 MB tier keep selections under ~30 s; over a minute rarely fits
+  even at minimum quality.
 - **Options → Force ffmpeg preview** disables live playback entirely
   and scrubs ffmpeg-decoded frames — use it when a file plays with
   wrong colors (DV profile 5 and friends).
