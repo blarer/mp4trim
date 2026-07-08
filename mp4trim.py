@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QRectF, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QProcess, QRectF, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction, QColor, QFont, QImage, QKeySequence, QLinearGradient, QPainter,
     QPainterPath, QPixmap, QPolygonF,
@@ -31,7 +31,8 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
+DISCORD_LIMIT_MB = 10.0
 
 
 def res_path(name: str) -> Path:
@@ -69,6 +70,11 @@ QPushButton#accent:disabled { background: #24422a; color: #7fa583; }
 QPushButton#play {
     font-size: 13pt; padding: 4px 0; min-width: 44px; border-radius: 22px;
 }
+QPushButton#gif {
+    background: #4752c4; border-color: #5865f2; color: #f0f2ff;
+}
+QPushButton#gif:hover { background: #5865f2; }
+QPushButton#gif:disabled { background: #2c3060; color: #7a80b0; }
 QLabel#mono { font-family: 'Cascadia Mono', 'Consolas', monospace; color: #b8b8c0; }
 QLabel#range { font-family: 'Cascadia Mono', 'Consolas', monospace; color: #8fd694; }
 QLabel#drop { color: #7a7a82; font-size: 12pt; background: #0d0d0f; }
@@ -241,6 +247,46 @@ class Timeline(QWidget):
         p.end()
 
 
+class GifWorker(QThread):
+    """Encode the trim range to GIF, stepping down quality until it fits
+    the Discord upload limit (palettegen/paletteuse two-pass per rung)."""
+
+    progress = Signal(str)
+    done = Signal(str, float, bool)  # path, size MB, fits limit
+    failed = Signal(str)
+
+    LADDER = [(480, 20), (480, 15), (400, 15), (360, 12),
+              (320, 12), (280, 10), (240, 10)]
+
+    def __init__(self, src: str, t_in: int, t_out: int, dst: str):
+        super().__init__()
+        self.src, self.t_in, self.t_out, self.dst = src, t_in, t_out, dst
+
+    def run(self):
+        size_mb = 0.0
+        for i, (width, fps) in enumerate(self.LADDER, 1):
+            self.progress.emit(
+                f"GIF pass {i}/{len(self.LADDER)}: {width}px @ {fps}fps …")
+            flt = (f"[0:v] fps={fps},scale={width}:-1:flags=lanczos,"
+                   f"split [a][b];[a] palettegen=stats_mode=diff [p];"
+                   f"[b][p] paletteuse=dither=bayer:bayer_scale=4:"
+                   f"diff_mode=rectangle")
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-ss", f"{self.t_in / 1000:.3f}",
+                 "-to", f"{self.t_out / 1000:.3f}", "-i", self.src,
+                 "-filter_complex", flt, "-loop", "0", self.dst],
+                capture_output=True, creationflags=CREATE_NO_WINDOW,
+            )
+            if r.returncode != 0:
+                self.failed.emit(r.stderr.decode(errors="replace")[-1500:])
+                return
+            size_mb = Path(self.dst).stat().st_size / 1_048_576
+            if size_mb <= DISCORD_LIMIT_MB:
+                self.done.emit(self.dst, size_mb, True)
+                return
+        self.done.emit(self.dst, size_mb, False)
+
+
 class SnapshotView(QWidget):
     """Shows a frame fit-to-window; drag a rectangle to select a crop."""
 
@@ -367,6 +413,7 @@ class Trimmer(QMainWindow):
         self.duration = 0
         self.position = 0
         self.proc: QProcess | None = None
+        self.gif_worker: GifWorker | None = None
         self.fallback = False   # True -> ffmpeg frame preview, no playback
         self._prime = False     # pause right after load to show first frame
 
@@ -402,29 +449,38 @@ class Trimmer(QMainWindow):
         self.btn_play.clicked.connect(self.play_pause)
         self.btn_play.setFocusPolicy(Qt.NoFocus)
 
-        self.btn_snap = QPushButton("📷 Snap")
+        self.btn_open = QPushButton("📂 Open")
+        self.btn_open.clicked.connect(self.open_dialog)
+        self.btn_snap = QPushButton("📷 Snapshot")
         self.btn_snap.setEnabled(False)
         self.btn_snap.clicked.connect(self.snapshot)
-        self.btn_snap.setFocusPolicy(Qt.NoFocus)
+        self.btn_gif = QPushButton("🎞 GIF for Discord")
+        self.btn_gif.setObjectName("gif")
+        self.btn_gif.setEnabled(False)
+        self.btn_gif.clicked.connect(self.export_gif)
 
         self.lbl_pos = QLabel("--:--:--.---")
         self.lbl_pos.setObjectName("mono")
         self.lbl_range = QLabel("")
         self.lbl_range.setObjectName("range")
-        self.btn_trim = QPushButton("Trim")
+        self.btn_trim = QPushButton("✂ Trim MP4")
         self.btn_trim.setObjectName("accent")
         self.btn_trim.clicked.connect(self.trim)
-        self.btn_trim.setFocusPolicy(Qt.NoFocus)
+
+        for b in (self.btn_open, self.btn_snap, self.btn_gif, self.btn_trim):
+            b.setFocusPolicy(Qt.NoFocus)
 
         row = QHBoxLayout()
         row.setContentsMargins(12, 4, 12, 10)
-        row.setSpacing(12)
+        row.setSpacing(10)
+        row.addWidget(self.btn_open)
         row.addWidget(self.btn_play)
         row.addWidget(self.btn_snap)
         row.addWidget(self.lbl_pos)
         row.addStretch()
         row.addWidget(self.lbl_range)
         row.addStretch()
+        row.addWidget(self.btn_gif)
         row.addWidget(self.btn_trim)
 
         root = QVBoxLayout()
@@ -452,9 +508,11 @@ class Trimmer(QMainWindow):
                            triggered=self.trim)
         act_snap = QAction("&Snapshot / Crop…", self, shortcut="S",
                            triggered=self.snapshot)
+        act_gif = QAction("Export &GIF for Discord", self, shortcut="G",
+                          triggered=self.export_gif)
         act_exit = QAction("E&xit", self, shortcut=QKeySequence.Quit,
                            triggered=self.close)
-        m_file.addActions([act_open, act_trim, act_snap])
+        m_file.addActions([act_open, act_trim, act_snap, act_gif])
         m_file.addSeparator()
         m_file.addAction(act_exit)
 
@@ -505,6 +563,7 @@ class Trimmer(QMainWindow):
 
         self.fallback = self.act_ffpreview.isChecked()
         self.btn_snap.setEnabled(True)
+        self.btn_gif.setEnabled(True)
         if self.fallback:
             self.enter_fallback(silent=True)
         else:
@@ -592,6 +651,58 @@ class Trimmer(QMainWindow):
             f"{Path(self.path).stem}_{self.position // 1000}s.png"))
         SnapshotDialog(img, default, self).exec()
 
+    def export_gif(self):
+        if not self.path or getattr(self, "gif_worker", None):
+            return
+        t_in, t_out = self.timeline.mark_in, self.timeline.mark_out
+        if t_out - t_in < 100:
+            QMessageBox.warning(self, "mp4trim", "In/out range is empty.")
+            return
+        if t_out - t_in > 60_000:
+            if QMessageBox.question(
+                    self, "mp4trim",
+                    "Selection is over a minute — GIFs that long get huge "
+                    "and may not fit Discord even at lowest quality.\n"
+                    "Continue anyway?") != QMessageBox.StandardButton.Yes:
+                return
+
+        src = Path(self.path)
+        dst = src.with_name(f"{src.stem}_clip_{t_in // 1000}-{t_out // 1000}.gif")
+        self.player.pause()
+        self.btn_gif.setEnabled(False)
+        self.btn_gif.setText("Encoding…")
+        self.gif_worker = GifWorker(self.path, t_in, t_out, str(dst))
+        self.gif_worker.progress.connect(self.statusBar().showMessage)
+        self.gif_worker.done.connect(self.gif_done)
+        self.gif_worker.failed.connect(self.gif_failed)
+        self.gif_worker.start()
+
+    def _gif_reset(self):
+        self.gif_worker = None
+        self.btn_gif.setEnabled(True)
+        self.btn_gif.setText("🎞 GIF for Discord")
+
+    def gif_done(self, path: str, size_mb: float, fits: bool):
+        self._gif_reset()
+        if fits:
+            self.statusBar().showMessage(f"GIF saved: {path} ({size_mb:.1f} MB)")
+            QMessageBox.information(
+                self, "mp4trim",
+                f"GIF saved ({size_mb:.1f} MB — fits Discord's "
+                f"{DISCORD_LIMIT_MB:.0f} MB limit):\n{path}")
+        else:
+            self.statusBar().showMessage(f"GIF saved but large: {size_mb:.1f} MB")
+            QMessageBox.warning(
+                self, "mp4trim",
+                f"GIF saved, but even at lowest quality it is "
+                f"{size_mb:.1f} MB (over Discord's {DISCORD_LIMIT_MB:.0f} MB). "
+                f"Trim a shorter range for a smaller file.\n{path}")
+
+    def gif_failed(self, err: str):
+        self._gif_reset()
+        self.statusBar().showMessage("GIF export failed")
+        QMessageBox.critical(self, "mp4trim", f"GIF export failed:\n{err}")
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if self.fallback:
@@ -658,7 +769,7 @@ class Trimmer(QMainWindow):
         err = bytes(self.proc.readAllStandardError()).decode(errors="replace")
         self.proc = None
         self.btn_trim.setEnabled(True)
-        self.btn_trim.setText("Trim")
+        self.btn_trim.setText("✂ Trim MP4")
         if code == 0:
             self.statusBar().showMessage(f"Saved: {dst}")
             QMessageBox.information(self, "mp4trim", f"Saved:\n{dst}")

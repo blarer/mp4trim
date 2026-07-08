@@ -31,9 +31,16 @@ Dolby Vision metadata. mp4trim avoids both:
 - **Trimming** is a pure stream copy (`-map 0 -c copy`). No re-encode,
   so every track and all DV/HDR10 metadata survive bit-exact. A
   half-hour cut takes seconds.
-- **Snapshots**: `S` grabs the current frame at native resolution
-  (decoded by ffmpeg, so colors are right), then drag to crop and copy
-  to clipboard or save as PNG.
+- **Snapshots**: grab the current frame at native resolution (decoded
+  by ffmpeg, so colors are right), then drag to crop and copy to
+  clipboard or save as PNG.
+- **GIF for Discord**: one click turns the selected range into a GIF,
+  automatically stepping down size/framerate until it fits Discord's
+  10 MB upload limit.
+
+Every action is a visible button — no shortcuts to memorize:
+
+**📂 Open · ▶ Play · 📷 Snapshot · 🎞 GIF for Discord · ✂ Trim MP4**
 
 ## How the timeline works
 
@@ -52,12 +59,15 @@ lands next to the source as `name_trim_START-END.mp4`.
 <img src="docs/how-it-works.svg" width="860" alt="pipeline diagram">
 </div>
 
-## Keyboard
+## Keyboard shortcuts (optional)
+
+Everything works by button; these are just faster:
 
 | Key | Action |
 | --- | --- |
 | `Space` | play / pause |
 | `S` | snapshot current frame → crop → copy to clipboard / save PNG |
+| `G` | export selected range as Discord-ready GIF |
 | `Left` / `Right` | step 1 s (`Shift` = 10 s) |
 | `Enter` | trim |
 | `Ctrl+O` | open — drag & drop works too |
@@ -91,6 +101,9 @@ python setup.py bdist_msi
   start can land a few seconds early. **Options → Frame-accurate**
   re-encodes video (x264 CRF 18) for exact cuts — but that drops Dolby
   Vision metadata, so leave it off for hybrid files.
+- GIF export tries 480px/20fps first and steps down through 7 quality
+  rungs until the file fits 10 MB. Keep selections under ~30 s for
+  crisp results; over a minute rarely fits even at minimum quality.
 - **Options → Force ffmpeg preview** disables live playback entirely
   and scrubs ffmpeg-decoded frames — use it when a file plays with
   wrong colors (DV profile 5 and friends).

@@ -29,7 +29,7 @@ bdist_msi_options = {
 
 setup(
     name="mp4trim",
-    version="1.2.0",
+    version="1.3.0",
     description="Simple MP4 trimmer - stream copy, hybrid DV/HDR10 safe",
     options={"build_exe": build_exe_options, "bdist_msi": bdist_msi_options},
     executables=[
