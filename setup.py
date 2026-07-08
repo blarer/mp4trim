@@ -15,6 +15,7 @@ build_exe_options = {
         "tkinter", "unittest", "email", "http", "xmlrpc", "pydoc", "test",
         "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtDBus", "PySide6.QtPdf",
     ],
+    "include_files": ["icon.ico"],
 }
 
 bdist_msi_options = {
@@ -33,6 +34,7 @@ setup(
         Executable(
             "mp4trim.py",
             base="gui",
+            icon="icon.ico",
             target_name="mp4trim.exe",
             shortcut_name="mp4trim",
             shortcut_dir="ProgramMenuFolder",

@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QPainterPath, QPixmap, QPolygonF,
 )
 from PySide6.QtCore import QPointF
+from PySide6.QtGui import QIcon
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -31,6 +32,15 @@ from PySide6.QtWidgets import (
 )
 
 APP_VERSION = "1.1.0"
+
+
+def res_path(name: str) -> Path:
+    base = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+            else Path(__file__).parent)
+    return base / name
+
+
+
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 HANDLE_GRAB_PX = 12
 
@@ -527,6 +537,9 @@ def main():
         font = QFont("Segoe UI", 10)
     app.setFont(font)
     app.setStyleSheet(STYLE)
+    icon = res_path("icon.ico")
+    if icon.exists():
+        app.setWindowIcon(QIcon(str(icon)))
     win = Trimmer()
     win.show()
     if len(sys.argv) > 1 and Path(sys.argv[1]).exists():
