@@ -23,6 +23,8 @@ bdist_msi_options = {
     "upgrade_code": "{7A5C0F3E-9B21-4D64-8E7A-2F1B3C4D5E6F}",
     "all_users": False,
     "initial_target_dir": r"[LocalAppDataFolder]\mp4trim",
+    # icon shown in the installer UI and Apps / Add-Remove Programs list
+    "install_icon": "icon.ico",
 }
 
 setup(
