@@ -31,6 +31,9 @@ Dolby Vision metadata. mp4trim avoids both:
 - **Trimming** is a pure stream copy (`-map 0 -c copy`). No re-encode,
   so every track and all DV/HDR10 metadata survive bit-exact. A
   half-hour cut takes seconds.
+- **Snapshots**: `S` grabs the current frame at native resolution
+  (decoded by ffmpeg, so colors are right), then drag to crop and copy
+  to clipboard or save as PNG.
 
 ## How the timeline works
 
@@ -54,6 +57,7 @@ lands next to the source as `name_trim_START-END.mp4`.
 | Key | Action |
 | --- | --- |
 | `Space` | play / pause |
+| `S` | snapshot current frame → crop → copy to clipboard / save PNG |
 | `Left` / `Right` | step 1 s (`Shift` = 10 s) |
 | `Enter` | trim |
 | `Ctrl+O` | open — drag & drop works too |

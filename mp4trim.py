@@ -22,16 +22,16 @@ from PySide6.QtGui import (
     QAction, QColor, QFont, QImage, QKeySequence, QLinearGradient, QPainter,
     QPainterPath, QPixmap, QPolygonF,
 )
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPoint, QPointF, QRect
 from PySide6.QtGui import QIcon
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
-    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QMainWindow,
+    QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 def res_path(name: str) -> Path:
@@ -91,10 +91,11 @@ def probe_duration_ms(path: str) -> int:
     return int(float(json.loads(out.stdout)["format"]["duration"]) * 1000)
 
 
-def grab_frame(path: str, ms: int) -> QImage | None:
+def grab_frame(path: str, ms: int, native: bool = False) -> QImage | None:
+    scale = [] if native else ["-vf", "scale=960:-2"]
     out = subprocess.run(
         ["ffmpeg", "-v", "quiet", "-ss", f"{ms / 1000:.3f}", "-i", path,
-         "-frames:v", "1", "-vf", "scale=960:-2", "-f", "image2pipe",
+         "-frames:v", "1", *scale, "-f", "image2pipe",
          "-vcodec", "bmp", "-"],
         capture_output=True, creationflags=CREATE_NO_WINDOW,
     )
@@ -240,6 +241,123 @@ class Timeline(QWidget):
         p.end()
 
 
+class SnapshotView(QWidget):
+    """Shows a frame fit-to-window; drag a rectangle to select a crop."""
+
+    def __init__(self, image: QImage):
+        super().__init__()
+        self.image = image
+        self.sel: QRect | None = None  # crop rect in image coordinates
+        self._anchor: QPoint | None = None
+        self.setMinimumSize(560, 340)
+        self.setCursor(Qt.CrossCursor)
+
+    def _fit(self):
+        iw, ih = self.image.width(), self.image.height()
+        s = min(self.width() / iw, self.height() / ih)
+        dw, dh = iw * s, ih * s
+        return QRectF((self.width() - dw) / 2, (self.height() - dh) / 2,
+                      dw, dh), s
+
+    def _to_img(self, pos) -> QPoint:
+        r, s = self._fit()
+        x = (pos.x() - r.left()) / s
+        y = (pos.y() - r.top()) / s
+        return QPoint(int(min(max(x, 0), self.image.width())),
+                      int(min(max(y, 0), self.image.height())))
+
+    def mousePressEvent(self, e):
+        self._anchor = self._to_img(e.position())
+        self.sel = None
+        self.update()
+
+    def mouseMoveEvent(self, e):
+        if self._anchor is not None:
+            self.sel = QRect(self._anchor, self._to_img(e.position())).normalized()
+            self.update()
+
+    def mouseReleaseEvent(self, _):
+        self._anchor = None
+        if self.sel and (self.sel.width() < 4 or self.sel.height() < 4):
+            self.sel = None
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor("#0d0d0f"))
+        r, s = self._fit()
+        p.drawImage(r, self.image)
+        if self.sel:
+            sv = QRectF(r.left() + self.sel.x() * s, r.top() + self.sel.y() * s,
+                        self.sel.width() * s, self.sel.height() * s)
+            shade = QPainterPath()
+            shade.addRect(QRectF(self.rect()))
+            shade.addRect(sv)
+            p.fillPath(shade, QColor(0, 0, 0, 150))  # dim outside selection
+            p.setPen(QColor("#66bb6a"))
+            p.drawRect(sv)
+            p.drawText(sv.adjusted(6, 4, 0, 0),
+                       Qt.AlignTop | Qt.AlignLeft,
+                       f"{self.sel.width()}×{self.sel.height()}")
+        p.end()
+
+
+class SnapshotDialog(QDialog):
+    def __init__(self, image: QImage, default_path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Snapshot — drag to crop")
+        self.resize(900, 580)
+        self.default_path = default_path
+        self.view = SnapshotView(image)
+
+        self.info = QLabel(f"{image.width()}×{image.height()}  —  "
+                           "drag to crop, or copy the full frame")
+        btn_copy = QPushButton("Copy to clipboard")
+        btn_copy.setObjectName("accent")
+        btn_copy.clicked.connect(self.copy)
+        btn_save = QPushButton("Save PNG…")
+        btn_save.clicked.connect(self.save)
+        btn_reset = QPushButton("Reset crop")
+        btn_reset.clicked.connect(self.reset)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+
+        row = QHBoxLayout()
+        row.addWidget(self.info)
+        row.addStretch()
+        for b in (btn_reset, btn_save, btn_copy, btn_close):
+            row.addWidget(b)
+
+        root = QVBoxLayout(self)
+        root.addWidget(self.view, stretch=1)
+        root.addLayout(row)
+
+    def cropped(self) -> QImage:
+        v = self.view
+        return v.image.copy(v.sel) if v.sel else v.image
+
+    def copy(self):
+        img = self.cropped()
+        QApplication.clipboard().setImage(img)
+        self.info.setText(f"Copied {img.width()}×{img.height()} to clipboard")
+
+    def save(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save snapshot", self.default_path, "PNG (*.png)")
+        if path:
+            img = self.cropped()
+            img.save(path, "PNG")
+            self.info.setText(f"Saved {img.width()}×{img.height()} → "
+                              f"{Path(path).name}")
+
+    def reset(self):
+        self.view.sel = None
+        self.view.update()
+        img = self.view.image
+        self.info.setText(f"{img.width()}×{img.height()}  —  "
+                          "drag to crop, or copy the full frame")
+
+
 class Trimmer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -284,6 +402,11 @@ class Trimmer(QMainWindow):
         self.btn_play.clicked.connect(self.play_pause)
         self.btn_play.setFocusPolicy(Qt.NoFocus)
 
+        self.btn_snap = QPushButton("📷 Snap")
+        self.btn_snap.setEnabled(False)
+        self.btn_snap.clicked.connect(self.snapshot)
+        self.btn_snap.setFocusPolicy(Qt.NoFocus)
+
         self.lbl_pos = QLabel("--:--:--.---")
         self.lbl_pos.setObjectName("mono")
         self.lbl_range = QLabel("")
@@ -297,6 +420,7 @@ class Trimmer(QMainWindow):
         row.setContentsMargins(12, 4, 12, 10)
         row.setSpacing(12)
         row.addWidget(self.btn_play)
+        row.addWidget(self.btn_snap)
         row.addWidget(self.lbl_pos)
         row.addStretch()
         row.addWidget(self.lbl_range)
@@ -326,9 +450,11 @@ class Trimmer(QMainWindow):
                            triggered=self.open_dialog)
         act_trim = QAction("&Trim / Export", self, shortcut="Ctrl+E",
                            triggered=self.trim)
+        act_snap = QAction("&Snapshot / Crop…", self, shortcut="S",
+                           triggered=self.snapshot)
         act_exit = QAction("E&xit", self, shortcut=QKeySequence.Quit,
                            triggered=self.close)
-        m_file.addActions([act_open, act_trim])
+        m_file.addActions([act_open, act_trim, act_snap])
         m_file.addSeparator()
         m_file.addAction(act_exit)
 
@@ -378,6 +504,7 @@ class Trimmer(QMainWindow):
         self.setWindowTitle(f"mp4trim — {Path(path).name}")
 
         self.fallback = self.act_ffpreview.isChecked()
+        self.btn_snap.setEnabled(True)
         if self.fallback:
             self.enter_fallback(silent=True)
         else:
@@ -452,6 +579,18 @@ class Trimmer(QMainWindow):
             self.frame_label.setPixmap(QPixmap.fromImage(img).scaled(
                 self.frame_label.size(), Qt.KeepAspectRatio,
                 Qt.SmoothTransformation))
+
+    def snapshot(self):
+        if not self.path:
+            return
+        self.player.pause()
+        img = grab_frame(self.path, self.position, native=True)
+        if img is None:
+            QMessageBox.warning(self, "mp4trim", "Could not grab this frame.")
+            return
+        default = str(Path(self.path).with_name(
+            f"{Path(self.path).stem}_{self.position // 1000}s.png"))
+        SnapshotDialog(img, default, self).exec()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
