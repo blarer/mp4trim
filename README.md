@@ -4,10 +4,10 @@
 
 # mp4trim
 
-**Drag two handles. Hit Trim. Done.**
+**Drag two handles. Hit Trim, or Discord MP4. Done.**
 
-A minimal MP4 trimmer with live playback and a drag-handle timeline —
-built for hybrid Dolby Vision / HDR10 files that other tools mangle.
+A fast MP4 trimmer with live playback, a zoomable thumbnail timeline, and
+one-click exports that actually fit Discord's upload limit.
 
 ![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)
 ![PySide6](https://img.shields.io/badge/GUI-PySide6-41CD52?logo=qt&logoColor=white)
@@ -18,63 +18,84 @@ built for hybrid Dolby Vision / HDR10 files that other tools mangle.
 
 </div>
 
-## Why
+## Three ways out
 
-Trimming a hybrid DV/HDR10 file in a normal editor usually means one of
-two failures: the preview renders green/purple (Windows decoders choke
-on some DV profiles), or the export re-encodes and silently strips the
-Dolby Vision metadata. mp4trim avoids both:
+| Button | What it does | Size |
+| --- | --- | --- |
+| **✂ Trim (lossless)** | Stream copy. Every track and all Dolby Vision / HDR10 metadata survive bit-exact. Takes seconds. | Same bitrate as the source. A 67 Mbps OBS clip is ~8 MB per second. |
+| **💬 Discord MP4** | Re-encodes to H.264 (NVENC on NVIDIA GPUs, x264 otherwise) at a bitrate computed from your Discord tier. Checks the real size afterwards and retries lower if it overshot. | Always under the limit you picked. |
+| **🎞 GIF** | Palette GIF, steps down size/fps until it fits your tier. | Under the limit, or it tells you to pick a shorter range. |
 
-- **Playback** runs on QtMultimedia (hardware decode + audio). If the
-  system decoder fails on a file, the app automatically drops to
-  ffmpeg-decoded frame previews — colors always correct.
-- **Trimming** is a pure stream copy (`-map 0 -c copy`). No re-encode,
-  so every track and all DV/HDR10 metadata survive bit-exact. A
-  half-hour cut takes seconds.
-- **Snapshots**: grab the current frame at native resolution (decoded
-  by ffmpeg, so colors are right), then drag to crop and copy to
-  clipboard or save as PNG.
-- **GIF for Discord**: one click turns the selected range into a GIF,
-  automatically stepping down size/framerate until it fits your Discord
-  upload limit — pick your tier under **Options → Discord upload
-  limit** (Free 10 MB / Nitro Basic 50 MB / Nitro 500 MB, remembered
-  between runs). Nitro tiers start at 720px/24fps for crisper GIFs.
-- **Auto-copy**: finished GIFs and trimmed MP4s land on your clipboard
-  as files — Ctrl+V straight into Discord.
+Every export is copied to the clipboard as a file, so Ctrl+V drops it
+straight into Discord. **Show in folder** appears in the status bar.
 
-Every action is a visible button — no shortcuts to memorize:
+Pick your tier (Free 10 MB, Nitro Basic 50 MB, Nitro 500 MB) in the
+**Discord limit** box. It is remembered between runs.
 
-**📂 Open · ▶ Play · 📷 Snapshot · 🎞 GIF for Discord · ✂ Trim MP4**
+### How Discord MP4 picks quality
 
-## How the timeline works
+The range label shows the plan live as you drag the handles, for example
+`Lossless ≈ 415 MB · Discord 50 MB → 1080p60 · 7.0 Mbps ✓`.
 
-<div align="center">
-<img src="docs/timeline-guide.png" width="820" alt="timeline guide">
-</div>
+1. Budget = 93% of the limit, minus audio (128 kbps, 96 on the 10 MB tier).
+2. Video bitrate = budget ÷ length, never above the source's own bitrate.
+3. Highest resolution/fps that still looks clean at that bitrate:
+   1440p60 → 1080p60 → 1080p30 → 720p60 → 720p30 → 540p30 → 480p30.
+4. Encode, measure, and re-encode lower if the file came out too big.
 
-Pull the **green** handle right to cut the beginning, pull the **red**
-handle left to cut the end. Dragging a handle previews the exact frame
-you're cutting on. The green region is what gets exported — output
-lands next to the source as `name_trim_START-END.mp4`.
+If a selection is too long to look acceptable even at 480p it warns you
+first and tells you the longest length that fits.
 
-## How it works under the hood
+Measured on a real 1440p60 AV1 OBS clip (51.5 s, 415 MB lossless):
 
-<div align="center">
-<img src="docs/how-it-works.svg" width="860" alt="pipeline diagram">
-</div>
+| Tier | Result |
+| --- | --- |
+| 10 MB | 9.4 MB, 540p30 |
+| 50 MB | 47.3 MB, 1080p60 |
+| 500 MB | 439 MB, 1440p60 (source bitrate, nothing to cut) |
 
-## Keyboard shortcuts (optional)
+## Editing
 
-Everything works by button; these are just faster:
+- **Timeline**: thumbnails, time ruler, green in-handle and red
+  out-handle. Scroll to zoom around the cursor (Shift+scroll pans,
+  double-click resets). The thin strip underneath is always the whole
+  file, with your range and the zoom window on it.
+- **Keyframe warning**: lossless cuts can only start on a keyframe. If
+  your in-point is between keyframes the label warns how much earlier the
+  clip will really start; press **K** to snap to it. Or turn on
+  **Options → Frame-accurate trim** (re-encodes, drops Dolby Vision).
+- **Playback** uses QtMultimedia (hardware decode + audio). If the system
+  decoder fails on a file it switches to ffmpeg-decoded previews
+  automatically, so colors are always right. HDR is tone-mapped for
+  previews, snapshots, GIFs and Discord MP4s.
+- **Snapshot**: grab the current frame at native resolution, drag to
+  crop, copy to clipboard or save PNG.
+- **Multiple audio tracks**: Discord MP4 uses track 1. **Options → Mix all
+  audio tracks** mixes them instead (only turn this on if your tracks are
+  different, e.g. game and mic, or the audio doubles in volume).
+
+## Keyboard shortcuts
+
+Everything works with buttons. These are faster. **F1** shows this list.
 
 | Key | Action |
 | --- | --- |
 | `Space` | play / pause |
-| `S` | snapshot current frame → crop → copy to clipboard / save PNG |
-| `G` | export selected range as Discord-ready GIF |
-| `Left` / `Right` | step 1 s (`Shift` = 10 s) |
-| `Enter` | trim |
-| `Ctrl+O` | open — drag & drop works too |
+| `I` / `O` | set in / out at the playhead |
+| `Home` / `End` | jump to in / out |
+| `,` / `.` | previous / next frame |
+| `Left` / `Right` | 1 s back / forward (`Shift` = 10 s) |
+| `K` | snap in-point to keyframe |
+| `Z` | reset timeline zoom |
+| `Enter` | trim (lossless) |
+| `D` | Discord MP4 |
+| `G` | GIF |
+| `S` | snapshot |
+| `Ctrl+O` | open (drag & drop and **File → Open Recent** work too) |
+
+Output names never overwrite anything:
+`clip_trim_0m14s-0m36s.mp4`, `clip_discord50mb_0m14s-0m36s.mp4`, then
+`… (2).mp4` if that exists.
 
 ## Install & run
 
@@ -85,8 +106,8 @@ pip install PySide6
 python mp4trim.py [file.mp4]
 ```
 
-Requires **ffmpeg / ffprobe on PATH** (not bundled) — e.g.
-`winget install Gyan.FFmpeg`.
+Requires **ffmpeg / ffprobe on PATH** (not bundled), e.g.
+`winget install Gyan.FFmpeg`. The app tells you if they are missing.
 
 **From the installer:** grab `mp4trim-*.msi` from `dist/` (or build it
 below). Installs per-user, no admin, Start Menu shortcut included;
@@ -99,27 +120,24 @@ pip install cx_Freeze
 python setup.py bdist_msi
 ```
 
-## Good to know
+## Checks
 
-- Stream copy cuts snap to the keyframe at/before the in-point, so the
-  start can land a few seconds early. **Options → Frame-accurate**
-  re-encodes video (x264 CRF 18) for exact cuts — but that drops Dolby
-  Vision metadata, so leave it off for hybrid files.
-- GIF export steps down through quality rungs (720px/24fps →
-  240px/10fps) until the file fits your Discord tier. On the free
-  10 MB tier keep selections under ~30 s; over a minute rarely fits
-  even at minimum quality.
-- **Options → Force ffmpeg preview** disables live playback entirely
-  and scrubs ffmpeg-decoded frames — use it when a file plays with
-  wrong colors (DV profile 5 and friends).
-- `icon.ico` is generated by `make_icon.py` (Pillow); README images are
-  rendered from the real app.
+These run against real clips (they encode video, so they are not a fast
+unit suite):
+
+```
+python tests/check_exports.py <clip.mp4> ...   # every tier: size, codec, audio, duration
+python tests/ui_smoke.py <clip.mp4>           # drives the window: marks, zoom, export, cancel
+python tests/quality_compare.py <clip.mp4>    # side-by-side frame + color tags
+python tests/make_screenshot.py <clip.mp4>    # regenerates docs/screenshot.png
+```
 
 ## Project layout
 
 ```
-mp4trim.py     the whole app — UI, playback, ffmpeg wiring
+mp4trim.py     the whole app: UI, playback, export planning, ffmpeg wiring
 setup.py       cx_Freeze build → exe + MSI
 make_icon.py   regenerates icon.ico / icon.png
+tests/         real-file export checks, UI smoke test, screenshot renderer
 docs/          README images
 ```
