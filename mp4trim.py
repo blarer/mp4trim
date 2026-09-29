@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.1.0"
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
 DISCORD_TIERS = [("Free · 10 MB", 10), ("Nitro Basic · 50 MB", 50),
                  ("Nitro · 500 MB", 500)]
@@ -642,37 +642,38 @@ class FrameGrabber(QThread):
 # ------------------------------------------------------------------- style
 
 STYLE = """
-QMainWindow, QDialog { background: #141416; }
+QMainWindow, QDialog { background: #000000; }
 QWidget { color: #e8e8ea; font-size: 10pt; }
-QMenuBar { background: #1b1b1e; padding: 2px; border: none; }
+QMenuBar { background: #000000; padding: 2px; border-bottom: 1px solid #131318; }
 QMenuBar::item { padding: 5px 12px; border-radius: 6px; background: transparent; }
-QMenuBar::item:selected { background: #2c2c31; }
-QMenu { background: #1e1e22; border: 1px solid #35353b; border-radius: 8px; padding: 6px; }
+QMenuBar::item:selected { background: #1a1a20; }
+QMenu { background: #0a0a0d; border: 1px solid #232329; border-radius: 8px; padding: 6px; }
 QMenu::item { padding: 6px 28px 6px 14px; border-radius: 6px; }
 QMenu::item:selected { background: #2e7d32; }
-QMenu::item:disabled { color: #6a6a70; }
-QMenu::separator { height: 1px; background: #35353b; margin: 6px 8px; }
+QMenu::item:disabled { color: #55555c; }
+QMenu::separator { height: 1px; background: #232329; margin: 6px 8px; }
 QPushButton {
-    background: #26262b; border: 1px solid #38383f; border-radius: 8px;
+    background: #101014; border: 1px solid #26262c; border-radius: 8px;
     padding: 7px 14px; font-weight: 600;
 }
-QPushButton:hover { background: #303036; border-color: #4a4a52; }
-QPushButton:pressed { background: #1e1e22; }
-QPushButton:disabled { color: #6a6a70; background: #202024; border-color: #2c2c32; }
+QPushButton:hover { background: #1a1a20; border-color: #3a3a44; }
+QPushButton:pressed { background: #08080a; }
+QPushButton:disabled { color: #55555c; background: #0a0a0d; border-color: #18181d; }
 QPushButton#accent { background: #2e7d32; border-color: #3a9440; color: #f2fff2; }
 QPushButton#accent:hover { background: #37953c; }
-QPushButton#accent:disabled { background: #24422a; color: #7fa583; }
+QPushButton#accent:disabled { background: #122415; color: #5c7a60; }
 QPushButton#discord { background: #4752c4; border-color: #5865f2; color: #f0f2ff; }
 QPushButton#discord:hover { background: #5865f2; }
-QPushButton#discord:disabled { background: #2c3060; color: #7a80b0; }
+QPushButton#discord:disabled { background: #181b3a; color: #5c6190; }
 QPushButton#tp { min-width: 36px; max-width: 36px; padding: 6px 0; font-size: 11pt; }
+QPushButton#nav { min-width: 30px; max-width: 30px; padding: 6px 0; font-size: 11pt; }
 QPushButton#play {
     min-width: 44px; max-width: 44px; min-height: 30px; padding: 4px 0;
-    font-size: 13pt; border-radius: 19px; background: #e8e8ea; color: #141416;
+    font-size: 13pt; border-radius: 19px; background: #e8e8ea; color: #000000;
     border: none;
 }
 QPushButton#play:hover { background: #ffffff; }
-QPushButton#play:disabled { background: #3a3a40; color: #6a6a70; }
+QPushButton#play:disabled { background: #1d1d23; color: #55555c; }
 QPushButton#mark { padding: 6px 10px; font-weight: 600; }
 QPushButton#link {
     background: transparent; border: none; color: #8ab4f8; padding: 2px 6px;
@@ -680,39 +681,41 @@ QPushButton#link {
 QPushButton#link:hover { text-decoration: underline; }
 QPushButton#cancel { padding: 2px 10px; }
 QComboBox {
-    background: #26262b; border: 1px solid #38383f; border-radius: 8px;
+    background: #101014; border: 1px solid #26262c; border-radius: 8px;
     padding: 6px 10px; min-width: 150px; font-weight: 600;
 }
-QComboBox:hover { border-color: #4a4a52; }
+QComboBox:hover { border-color: #3a3a44; }
 QComboBox::drop-down { border: none; width: 20px; }
 QComboBox QAbstractItemView {
-    background: #1e1e22; border: 1px solid #35353b; outline: none;
+    background: #0a0a0d; border: 1px solid #232329; outline: none;
     selection-background-color: #4752c4; padding: 4px;
 }
 QProgressBar {
-    background: #26262b; border: none; border-radius: 4px;
+    background: #101014; border: none; border-radius: 4px;
     max-height: 8px; min-width: 180px;
 }
 QProgressBar::chunk { background: #5865f2; border-radius: 4px; }
-QToolTip { background: #1e1e22; color: #e8e8ea; border: 1px solid #35353b; padding: 4px; }
+QToolTip { background: #0a0a0d; color: #e8e8ea; border: 1px solid #232329; padding: 4px; }
 QLabel#time { font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 13pt; color: #f0f0f2; }
-QLabel#dur { font-family: 'Cascadia Mono', 'Consolas', monospace; color: #7a7a82; }
+QLabel#dur { font-family: 'Cascadia Mono', 'Consolas', monospace; color: #6a6a74; }
 QLabel#range { font-family: 'Cascadia Mono', 'Consolas', monospace; color: #8fd694; }
 QLabel#est { color: #a0a0a8; }
 QLabel#muted { color: #8a8a92; }
-QLabel#drop { color: #7a7a82; font-size: 13pt; background: #0d0d0f; }
-QStatusBar { background: #1b1b1e; color: #8a8a92; }
+QLabel#drop { color: #6a6a74; font-size: 13pt; background: #000000; }
+QStatusBar { background: #000000; color: #8a8a92; border-top: 1px solid #131318; }
 QStatusBar::item { border: none; }
 """
 
 SHORTCUTS_HELP = """<table cellspacing=6>
 <tr><td><b>Space</b></td><td>play / pause</td></tr>
+<tr><td><b>PgUp</b> / <b>PgDn</b></td><td>previous / next video in the folder</td></tr>
 <tr><td><b>I</b> / <b>O</b></td><td>set in / out at the playhead</td></tr>
 <tr><td><b>Home</b> / <b>End</b></td><td>jump to in / out</td></tr>
 <tr><td><b>,</b> / <b>.</b></td><td>previous / next frame</td></tr>
 <tr><td><b>Left</b> / <b>Right</b></td><td>1 s back / forward (Shift = 10 s)</td></tr>
 <tr><td><b>K</b></td><td>snap in-point to the keyframe (exact lossless start)</td></tr>
 <tr><td><b>Mouse wheel</b></td><td>zoom the timeline (Shift+wheel pans, double-click resets)</td></tr>
+<tr><td><b>Drag below the timeline</b></td><td>fine scrubbing: further down = slower (½, ¼, fine)</td></tr>
 <tr><td><b>Enter</b></td><td>trim (lossless)</td></tr>
 <tr><td><b>D</b></td><td>export Discord MP4</td></tr>
 <tr><td><b>G</b></td><td>export GIF</td></tr>
@@ -736,6 +739,10 @@ class Timeline(QWidget):
 
     RULER = 18
     OVERVIEW = 8
+    # Apple-style fine scrubbing: dragging further below the bar drops the
+    # horizontal sensitivity through tiers. (min px below bar, rate, label)
+    SCRUB_TIERS = [(140, 0.05, "fine scrubbing"), (90, 0.25, "¼ speed"),
+                   (40, 0.5, "½ speed"), (0, 1.0, "")]
 
     def __init__(self):
         super().__init__()
@@ -753,6 +760,10 @@ class Timeline(QWidget):
         self._thumb_img: list[QImage] = []
         self._drag = None   # None | "in" | "out" | "seek"
         self._hover = None  # None | "in" | "out"
+        self._rate = 1.0            # active scrub sensitivity
+        self._anchor_x = 0.0        # x where the current rate segment began
+        self._anchor_ms = 0.0       # target value at that x
+        self._last_x = 0.0          # previous mouse x during a drag
         self.update()
 
     def add_thumb(self, ms: int, img: QImage):
@@ -812,6 +823,11 @@ class Timeline(QWidget):
             return
         self._drag = self._hit(e.position().x())
         self._apply_drag(e.position().x())
+        # anchor for fine scrubbing at the (possibly jumped-to) value
+        self._rate = 1.0
+        self._anchor_x = e.position().x()
+        self._last_x = e.position().x()
+        self._anchor_ms = float(self._drag_value())
 
     def mouseDoubleClickEvent(self, e):
         if self._hit(e.position().x()) == "seek":
@@ -820,7 +836,7 @@ class Timeline(QWidget):
     def mouseMoveEvent(self, e):
         x = e.position().x()
         if self._drag:
-            self._apply_drag(x)
+            self._fine_drag(x, e.position().y())
         else:
             over = self._hit(x)
             hover = over if over in ("in", "out") else None
@@ -838,6 +854,8 @@ class Timeline(QWidget):
 
     def mouseReleaseEvent(self, _):
         self._drag = None
+        self._rate = 1.0
+        self.update()
 
     def wheelEvent(self, e):
         if self.duration <= 0:
@@ -857,6 +875,14 @@ class Timeline(QWidget):
 
     def _apply_drag(self, x: float):
         ms = self._x_to_ms(x)
+        self._set_drag_value(ms)
+
+    def _drag_value(self) -> int:
+        return {"in": self.mark_in, "out": self.mark_out,
+                "seek": self.position}.get(self._drag, self.position)
+
+    def _set_drag_value(self, ms: float):
+        ms = int(ms)
         if self._drag == "in":
             self.mark_in = max(0, min(ms, self.mark_out - 100))
             self.range_changed.emit()
@@ -866,9 +892,33 @@ class Timeline(QWidget):
             self.range_changed.emit()
             self.seeked.emit(self.mark_out)
         else:
-            self.seeked.emit(ms)
+            self.seeked.emit(max(0, min(ms, self.duration)))
         self.update()
 
+    def _rate_for(self, y: float) -> tuple[float, str]:
+        """Scrub sensitivity from vertical distance below the bar."""
+        below = y - (self.height() - self.OVERVIEW)
+        for min_px, rate, label in self.SCRUB_TIERS:
+            if below >= min_px:
+                return rate, label
+        return 1.0, ""
+
+    def _fine_drag(self, x: float, y: float):
+        """Relative scrubbing, Apple style: T = T_anchor + ΔX·rate·(ms/px).
+
+        On a tier change the anchor rebases at the previous x, so motion in
+        the same event still counts at the new rate and returning to full
+        speed never snaps the value to the absolute cursor position.
+        """
+        rate, _ = self._rate_for(y)
+        if rate != self._rate:
+            self._anchor_x = self._last_x
+            self._anchor_ms = float(self._drag_value())
+            self._rate = rate
+        ms_per_px = self._span() / max(self.width(), 1)
+        self._set_drag_value(self._anchor_ms + (x - self._anchor_x)
+                             * ms_per_px * rate)
+        self._last_x = x
     # --- painting ---
     def _draw_handle(self, p: QPainter, x: float, bar: QRectF, color: str,
                      active: bool):
@@ -916,11 +966,11 @@ class Timeline(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
         w, h = self.width(), self.height()
-        p.fillRect(self.rect(), QColor("#141416"))
+        p.fillRect(self.rect(), QColor("#000000"))
         bar = QRectF(0, self.RULER, w, h - self.RULER - self.OVERVIEW - 2)
         track = QPainterPath()
         track.addRoundedRect(bar, 6, 6)
-        p.fillPath(track, QColor("#222227"))
+        p.fillPath(track, QColor("#101014"))
 
         if self.duration <= 0:
             p.end()
@@ -953,7 +1003,7 @@ class Timeline(QWidget):
             p.fillRect(QRectF(x_in, bar.top(), max(x_out - x_in, 0),
                               bar.height()), grad)
         # dim what gets cut away
-        shade = QColor(8, 8, 10, 200)
+        shade = QColor(0, 0, 0, 215)
         p.fillRect(QRectF(0, bar.top(), max(x_in, 0), bar.height()), shade)
         p.fillRect(QRectF(x_out, bar.top(), max(w - x_out, 0), bar.height()),
                    shade)
@@ -981,6 +1031,29 @@ class Timeline(QWidget):
                           self._hover == "in" or self._drag == "in")
         self._draw_handle(p, x_out, bar, "#ef5350",
                           self._hover == "out" or self._drag == "out")
+
+        # fine-scrub tier badge above the playhead while dragging slowed
+        if self._drag and self._rate < 1.0:
+            _, label = next(((r, l) for _, r, l in self.SCRUB_TIERS
+                             if r == self._rate), (1.0, ""))
+            if label:
+                f = QFont(self.font())
+                f.setPointSizeF(8.5)
+                f.setBold(True)
+                p.setFont(f)
+                fm = p.fontMetrics()
+                tw = fm.horizontalAdvance(label) + 16
+                bx = min(max(self._ms_to_x(self._drag_value()) - tw / 2, 4),
+                         w - tw - 4)
+                badge = QRectF(bx, bar.top() + 4, tw, fm.height() + 6)
+                path = QPainterPath()
+                path.addRoundedRect(badge, 6, 6)
+                p.fillPath(path, QColor(0, 0, 0, 230))
+                p.setPen(QPen(QColor("#5865f2"), 1))
+                p.drawPath(path)
+                p.setPen(QColor("#e8e8ea"))
+                p.drawText(badge, Qt.AlignCenter, label)
+                p.setPen(Qt.NoPen)
 
         # overview strip: whole file, kept range, and the zoom window
         oy = h - self.OVERVIEW + 2
@@ -1181,6 +1254,10 @@ class Trimmer(QMainWindow):
             return b
 
         self.btn_go_in = btn("⇤", "Go to in-point (Home)", self.go_in, "tp")
+        self.btn_prev_vid = btn("«", "Previous video in this folder (PgUp)",
+                                lambda: self.step_video(-1), "nav")
+        self.btn_next_vid = btn("»", "Next video in this folder (PgDn)",
+                                lambda: self.step_video(1), "nav")
         self.btn_prev = btn("◂", "Previous frame  ( , )",
                             lambda: self.step_frames(-1), "tp")
         self.btn_play = btn("▶", "Play / pause (Space)", self.play_pause, "play")
@@ -1207,6 +1284,9 @@ class Trimmer(QMainWindow):
         row_a = QHBoxLayout()
         row_a.setContentsMargins(12, 6, 12, 4)
         row_a.setSpacing(6)
+        row_a.addWidget(self.btn_prev_vid)
+        row_a.addWidget(self.btn_next_vid)
+        row_a.addSpacing(10)
         for w in (self.btn_go_in, self.btn_prev, self.btn_play, self.btn_next,
                   self.btn_go_out):
             row_a.addWidget(w)
@@ -1341,6 +1421,11 @@ class Trimmer(QMainWindow):
         m_edit.addSeparator()
         m_edit.addAction(self._act("Reset timeline &zoom", self.timeline.reset_zoom, "Z"))
         m_edit.addAction(self._act("Reset in/out to whole file", self.reset_marks, "Ctrl+R"))
+        m_edit.addSeparator()
+        m_edit.addAction(self._act("&Previous video in folder",
+                                   lambda: self.step_video(-1), "PgUp"))
+        m_edit.addAction(self._act("&Next video in folder",
+                                   lambda: self.step_video(1), "PgDown"))
 
         # playback keys that live on the window, not in a menu
         for text, slot, key in [
@@ -1473,10 +1558,12 @@ class Trimmer(QMainWindow):
             self.player.setSource(QUrl.fromLocalFile(path))
             self.player.play()  # paused on first frame via on_player_pos
             hdr = " · HDR" if info.hdr else ""
+            vids, idx = self._siblings()
+            pos = f" · clip {idx + 1} of {len(vids)}" if idx >= 0 else ""
             self.statusBar().showMessage(
                 f"{Path(path).name} · {info.width}×{info.height} "
                 f"{info.fps:.0f}fps {info.v_codec.upper()}{hdr} · "
-                f"{info.total_kbps / 1000:.0f} Mbps")
+                f"{info.total_kbps / 1000:.0f} Mbps{pos}")
         self.update_controls()
         self.refresh_pos()
         self.refresh_range()
@@ -1502,6 +1589,40 @@ class Trimmer(QMainWindow):
     def _on_thumb(self, gen: int, ms: int, img: QImage):
         if gen == self._gen:
             self.timeline.add_thumb(ms, img)
+
+    # ---------------------------------------------------- folder navigation
+
+    def _siblings(self) -> tuple[list[Path], int]:
+        """Videos in the open file's folder (name order) + index of current."""
+        if not self.info:
+            return [], -1
+        cur = Path(self.info.path)
+        try:
+            vids = sorted((p for p in cur.parent.iterdir()
+                           if p.suffix.lower() in VIDEO_EXTS and p.is_file()),
+                          key=lambda p: p.name.lower())
+        except OSError:
+            return [], -1
+        me = os.path.normcase(str(cur))
+        idx = next((i for i, p in enumerate(vids)
+                    if os.path.normcase(str(p)) == me), -1)
+        return vids, idx
+
+    def step_video(self, delta: int):
+        vids, idx = self._siblings()
+        if not vids or self.job:
+            return
+        if idx < 0:
+            idx = 0 if delta > 0 else len(vids) - 1
+            self.load(str(vids[idx]))
+            return
+        j = idx + delta
+        if not 0 <= j < len(vids):
+            self.statusBar().showMessage(
+                "Last video in this folder" if delta > 0
+                else "First video in this folder")
+            return
+        self.load(str(vids[j]))
 
     # ------------------------------------------------- playback / preview
 
@@ -1638,6 +1759,8 @@ class Trimmer(QMainWindow):
         for b in (self.btn_go_in, self.btn_prev, self.btn_next, self.btn_go_out,
                   self.btn_set_in, self.btn_set_out):
             b.setEnabled(loaded)
+        for b in (self.btn_prev_vid, self.btn_next_vid):
+            b.setEnabled(loaded and not busy)
         self.btn_play.setEnabled(loaded and not self.fallback)
         for b in (self.btn_snap, self.btn_gif, self.btn_discord, self.btn_trim):
             b.setEnabled(loaded and not busy)

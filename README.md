@@ -56,6 +56,14 @@ Measured on a real 1440p60 AV1 OBS clip (51.5 s, 415 MB lossless):
 
 ## Editing
 
+- **Browse the folder**: « and » (or PgUp / PgDn) jump to the previous or
+  next video in the same folder, so you can work through a night of OBS
+  clips without reopening. The status bar shows "clip N of M".
+- **Fine scrubbing** (Apple style): while dragging the playhead or a
+  handle, pull the mouse further below the timeline to slow the drag:
+  ½ speed → ¼ speed → fine (about 3 ms per pixel, finer than one 60 fps
+  frame). A badge above the playhead shows the active speed, and moving
+  back up returns to full speed without jumping.
 - **Timeline**: thumbnails, time ruler, green in-handle and red
   out-handle. Scroll to zoom around the cursor (Shift+scroll pans,
   double-click resets). The thin strip underneath is always the whole
@@ -143,6 +151,7 @@ python tests/check_exports.py <clip.mp4> ...   # every tier: size, codec, audio,
 python tests/ui_smoke.py <clip.mp4>           # drives the window: marks, zoom, export, cancel
 python tests/quality_compare.py <clip.mp4>    # side-by-side frame + color tags
 python tests/check_misc.py <clip.mp4>         # GIF ladder, frame-accurate, handles, snapshot
+python tests/check_v21.py <clip.mp4>          # fine scrubbing, folder nav, OLED theme
 python tests/check_portable.py <app_dir> <clip.mp4>  # stripped PATH, no NVENC: bundled ffmpeg + x264
 python tests/accept_installed.py <clip.mp4>   # installed app, real 'D' keypress, checks output
 python tests/make_screenshot.py <clip.mp4>    # regenerates docs/screenshot.png
