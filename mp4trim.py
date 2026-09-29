@@ -1049,6 +1049,7 @@ class Timeline(QWidget):
                 path = QPainterPath()
                 path.addRoundedRect(badge, 6, 6)
                 p.fillPath(path, QColor(0, 0, 0, 230))
+                p.setBrush(Qt.NoBrush)  # playhead brush would fill the pill
                 p.setPen(QPen(QColor("#5865f2"), 1))
                 p.drawPath(path)
                 p.setPen(QColor("#e8e8ea"))
