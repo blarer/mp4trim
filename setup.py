@@ -53,7 +53,7 @@ bdist_msi_options = {
 
 setup(
     name="mp4trim",
-    version="2.0.1",
+    version="2.0.2",
     description="MP4 trimmer - lossless trim and Discord-sized exports",
     options={"build_exe": build_exe_options, "bdist_msi": bdist_msi_options},
     executables=[

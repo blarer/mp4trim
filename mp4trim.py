@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
 DISCORD_TIERS = [("Free · 10 MB", 10), ("Nitro Basic · 50 MB", 50),
                  ("Nitro · 500 MB", 500)]
@@ -1838,6 +1838,8 @@ class Trimmer(QMainWindow):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
+        sys.exit(selftest(sys.argv[2:]))
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     font = QFont("Segoe UI Variable Text", 10)
@@ -1853,6 +1855,74 @@ def main():
     if len(sys.argv) > 1 and Path(sys.argv[1]).exists():
         win.load(sys.argv[1])
     sys.exit(app.exec())
+
+
+def selftest(argv: list[str]) -> int:
+    """Headless end-to-end check of the installed app on this machine.
+
+        mp4trim.exe --selftest <out.json> [clip.mp4]
+
+    Uses the same code paths as the buttons. Without a clip it synthesizes a
+    1440p60 test video with the bundled ffmpeg. Writes a JSON report (a GUI
+    exe has no console) and returns 0 only if every check passed.
+    """
+    report_path = Path(argv[0]) if argv else Path(tempfile.gettempdir()) / "mp4trim-selftest.json"
+    rep: dict = {"version": APP_VERSION, "frozen": bool(getattr(sys, "frozen", False)),
+                 "checks": {}}
+    ok = True
+
+    def chk(name, cond, detail=""):
+        nonlocal ok
+        rep["checks"][name] = {"ok": bool(cond), "detail": detail}
+        ok = ok and bool(cond)
+
+    work = Path(tempfile.mkdtemp(prefix="mp4trim-selftest-"))
+    try:
+        rep["ffmpeg"], rep["ffprobe"] = tool("ffmpeg"), tool("ffprobe")
+        chk("ffmpeg_found", have_ffmpeg(), rep["ffmpeg"])
+        chk("ffmpeg_bundled", Path(rep["ffmpeg"]).parent == res_path("ffmpeg")
+            or not rep["frozen"], rep["ffmpeg"])
+        rep["encoder"] = h264_encoder()
+        run = lambda a, s, l: run_ffmpeg(a, s, l)  # noqa: E731
+        clip = argv[1] if len(argv) > 1 else None
+        if not clip:
+            clip = str(work / "synthetic (2).mp4")
+            run(["-f", "lavfi", "-i", "testsrc2=s=2560x1440:r=60:d=20",
+                 "-f", "lavfi", "-i", "sine=f=440:d=20", "-c:v", "libx264",
+                 "-preset", "ultrafast", "-b:v", "60M", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-shortest", clip], 20, "synth")
+        info = probe(clip)
+        rep["source"] = {"w": info.width, "h": info.height, "fps": info.fps,
+                         "mb": os.path.getsize(clip) / 1e6,
+                         "sec": info.duration_ms / 1000}
+        kfs = probe_keyframes(clip, info.start_s)
+        chk("keyframes", len(kfs) > 0, f"{len(kfs)} keyframes")
+        chk("thumbnail", grab_thumb(clip, 2000, info.hdr) is not None)
+        results = {}
+        for limit in (10, 50):
+            dst = str(output_path(clip, f"discord{limit}mb", 0, info.duration_ms, ".mp4"))
+            _, msg, good = export_discord(run, info, 0, info.duration_ms, dst,
+                                          limit, False)
+            size = os.path.getsize(dst) / 1e6
+            v = probe(dst)
+            results[limit] = {"mb": round(size, 2), "h": min(v.width, v.height),
+                              "codec": v.v_codec, "msg": msg}
+            chk(f"discord_{limit}mb", good and size <= limit and v.v_codec == "h264",
+                f"{size:.2f} MB {v.v_codec} {v.width}x{v.height}")
+        rep["discord"] = results
+        dst = str(output_path(clip, "trim", 1000, 6000, ".mp4"))
+        export_trim(run, info, 1000, 6000, dst, False)
+        chk("lossless_trim", probe(dst).v_codec == info.v_codec, dst)
+        dst = str(output_path(clip, "clip", 1000, 4000, ".gif"))
+        _, msg, good = export_gif(run, info, 1000, 4000, dst, 10)
+        chk("gif_10mb", good, msg)
+    except Exception as e:  # noqa: BLE001
+        chk("exception", False, f"{type(e).__name__}: {e}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    rep["ok"] = ok
+    report_path.write_text(json.dumps(rep, indent=2), encoding="utf-8")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
