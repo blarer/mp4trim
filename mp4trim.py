@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
 DISCORD_TIERS = [("Free · 10 MB", 10), ("Nitro Basic · 50 MB", 50),
                  ("Nitro · 500 MB", 500)]
@@ -67,8 +67,23 @@ def res_path(name: str) -> Path:
     return base / name
 
 
+@lru_cache(maxsize=None)
+def tool(name: str) -> str:
+    """Path to ffmpeg/ffprobe. Prefers the copy bundled next to the app
+    (installer ships one in ./ffmpeg), then a local ./ffmpeg folder when run
+    from source, then PATH. MP4TRIM_USE_PATH=1 skips the bundled copy."""
+    exe = name + (".exe" if sys.platform == "win32" else "")
+    if not os.environ.get("MP4TRIM_USE_PATH"):
+        for base in (res_path("ffmpeg"), res_path("ffmpeg") / "bin"):
+            cand = base / exe
+            if cand.is_file():
+                return str(cand)
+    return shutil.which(name) or name
+
+
 def have_ffmpeg() -> bool:
-    return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+    return all(Path(tool(n)).is_file() or shutil.which(tool(n))
+               for n in ("ffmpeg", "ffprobe"))
 
 
 # --------------------------------------------------------------- formatting
@@ -166,7 +181,7 @@ def _rate(s: str | None) -> float:
 
 def probe(path: str) -> MediaInfo:
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-print_format", "json",
+        [tool("ffprobe"), "-v", "error", "-print_format", "json",
          "-show_format", "-show_streams", path],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         creationflags=CREATE_NO_WINDOW,
@@ -205,7 +220,7 @@ def probe(path: str) -> MediaInfo:
 def probe_keyframes(path: str, start_s: float) -> list[int]:
     """Keyframe times in ms relative to the file start (the trim timeline)."""
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+        [tool("ffprobe"), "-v", "error", "-select_streams", "v:0",
          "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", path],
         capture_output=True, text=True, creationflags=CREATE_NO_WINDOW | BELOW_NORMAL,
     )
@@ -231,7 +246,7 @@ def grab_frame(path: str, ms: int, native: bool = False,
     if hdr:
         vf += [TONEMAP, "format=yuv420p"]
     out = subprocess.run(
-        ["ffmpeg", "-v", "quiet", "-ss", f"{ms / 1000:.3f}", "-i", path,
+        [tool("ffmpeg"), "-v", "quiet", "-ss", f"{ms / 1000:.3f}", "-i", path,
          "-frames:v", "1", *(["-vf", ",".join(vf)] if vf else []),
          "-f", "image2pipe", "-vcodec", "bmp", "-"],
         capture_output=True, creationflags=CREATE_NO_WINDOW,
@@ -246,7 +261,7 @@ def grab_thumb(path: str, ms: int, hdr: bool, height: int = 56) -> QImage | None
     """Fast keyframe-only thumbnail; low priority so it never fights a game."""
     vf = f"scale=-2:{height}" + (f",{TONEMAP},format=yuv420p" if hdr else "")
     out = subprocess.run(
-        ["ffmpeg", "-v", "quiet", "-skip_frame", "nokey", "-noaccurate_seek",
+        [tool("ffmpeg"), "-v", "quiet", "-skip_frame", "nokey", "-noaccurate_seek",
          "-ss", f"{ms / 1000:.3f}", "-i", path, "-frames:v", "1",
          "-vf", vf, "-threads", "2", "-f", "image2pipe", "-vcodec", "bmp", "-"],
         capture_output=True, creationflags=CREATE_NO_WINDOW | BELOW_NORMAL,
@@ -307,15 +322,32 @@ def lossless_mb(keep_ms: int, info: MediaInfo) -> float:
     return info.total_kbps * keep_ms / 1000 / 8 / 1000
 
 
+# Options each encoder is used with. The probe runs these exact options, so an
+# older ffmpeg or GPU driver that rejects one (e.g. -multipass, -tune hq)
+# falls back to the CPU encoder instead of failing the export.
+PROBE_OPTS = {
+    "h264_nvenc": ["-preset", "p6", "-tune", "hq", "-rc", "vbr",
+                   "-multipass", "fullres", "-b:v", "2000k", "-maxrate",
+                   "2600k", "-bufsize", "4000k", "-spatial-aq", "1",
+                   "-rc-lookahead", "32", "-profile:v", "high"],
+    "hevc_nvenc": ["-preset", "p6", "-rc", "vbr", "-cq", "18", "-b:v", "0",
+                   "-profile:v", "main10", "-pix_fmt", "p010le"],
+}
+
+
 @lru_cache(maxsize=None)
 def encoder_works(codec: str) -> bool:
     if os.environ.get("MP4TRIM_NO_NVENC") and "nvenc" in codec:
         return False
-    r = subprocess.run(
-        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-         "color=s=256x256:d=0.1", "-c:v", codec, "-f", "null", "-"],
-        capture_output=True, creationflags=CREATE_NO_WINDOW,
-    )
+    try:
+        r = subprocess.run(
+            [tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i",
+             "color=s=640x360:r=30:d=0.5", "-c:v", codec,
+             *PROBE_OPTS.get(codec, []), "-f", "null", "-"],
+            capture_output=True, creationflags=CREATE_NO_WINDOW, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     return r.returncode == 0
 
 
@@ -469,7 +501,7 @@ def run_ffmpeg(args: list[str], span_s: float, label: str,
     """Run ffmpeg with machine-readable progress. Raises on failure."""
     if is_cancelled():
         raise Cancelled
-    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-y", "-v", "error",
+    cmd = [tool("ffmpeg"), "-hide_banner", "-nostdin", "-y", "-v", "error",
            "-progress", "pipe:1", "-nostats", *args]
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(
@@ -1383,13 +1415,16 @@ class Trimmer(QMainWindow):
             "Drag the green/red handles to pick the kept range.<br>"
             "<b>Trim</b> is lossless (stream copy, Dolby Vision / HDR safe).<br>"
             "<b>Discord MP4</b> re-encodes to fit your upload limit.<br><br>"
-            "Requires ffmpeg on PATH.")
+            f"ffmpeg: {tool('ffmpeg')}<br>"
+            f"Encoder: {h264_encoder()}")
 
     def _warn_no_ffmpeg(self):
         QMessageBox.warning(
             self, "mp4trim",
-            "ffmpeg / ffprobe were not found on PATH.\n\n"
-            "Install them, then restart mp4trim:\n    winget install Gyan.FFmpeg")
+            "ffmpeg / ffprobe were not found. The installer ships them, so "
+            "reinstalling mp4trim fixes this.\n\n"
+            "Running from source? Run  python fetch_ffmpeg.py  or\n"
+            "    winget install Gyan.FFmpeg")
 
     # ------------------------------------------------------- file handling
 

@@ -99,26 +99,39 @@ Output names never overwrite anything:
 
 ## Install & run
 
+**Installer (any Windows 10/11 x64 PC):** download `mp4trim-*-win64.msi`
+from the [Releases page](https://github.com/blarer/mp4trim/releases) and
+run it. It is self-contained: Python, Qt, the Visual C++ runtime and
+ffmpeg/ffprobe are all inside, so nothing else needs to be installed.
+Per-user install, no admin, Start Menu shortcut; upgrades replace the old
+version in place.
+
+- NVIDIA GPU: Discord MP4 encodes on NVENC (fast).
+- Any other GPU / no GPU: it automatically uses the x264 CPU encoder.
+  Same size targets, just slower.
+- **Help → About** shows which ffmpeg and encoder it is using.
+
 **From source:**
 
 ```
 pip install PySide6
+python fetch_ffmpeg.py        # once: downloads ffmpeg into ./ffmpeg
 python mp4trim.py [file.mp4]
 ```
 
-Requires **ffmpeg / ffprobe on PATH** (not bundled), e.g.
-`winget install Gyan.FFmpeg`. The app tells you if they are missing.
-
-**From the installer:** grab `mp4trim-*.msi` from `dist/` (or build it
-below). Installs per-user, no admin, Start Menu shortcut included;
-upgrades replace the old version in place.
+Without `./ffmpeg` it falls back to ffmpeg on PATH
+(`winget install Gyan.FFmpeg`). The app tells you if neither is found.
 
 ## Build the MSI
 
 ```
 pip install cx_Freeze
+python fetch_ffmpeg.py
 python setup.py bdist_msi
 ```
+
+The build refuses to run without `./ffmpeg`, so an installer can never
+ship without it.
 
 ## Checks
 
@@ -129,6 +142,9 @@ unit suite):
 python tests/check_exports.py <clip.mp4> ...   # every tier: size, codec, audio, duration
 python tests/ui_smoke.py <clip.mp4>           # drives the window: marks, zoom, export, cancel
 python tests/quality_compare.py <clip.mp4>    # side-by-side frame + color tags
+python tests/check_misc.py <clip.mp4>         # GIF ladder, frame-accurate, handles, snapshot
+python tests/check_portable.py <app_dir> <clip.mp4>  # stripped PATH, no NVENC: bundled ffmpeg + x264
+python tests/accept_installed.py <clip.mp4>   # installed app, real 'D' keypress, checks output
 python tests/make_screenshot.py <clip.mp4>    # regenerates docs/screenshot.png
 ```
 
@@ -137,6 +153,7 @@ python tests/make_screenshot.py <clip.mp4>    # regenerates docs/screenshot.png
 ```
 mp4trim.py     the whole app: UI, playback, export planning, ffmpeg wiring
 setup.py       cx_Freeze build → exe + MSI
+fetch_ffmpeg.py downloads the ffmpeg that the installer bundles
 make_icon.py   regenerates icon.ico / icon.png
 tests/         real-file export checks, UI smoke test, screenshot renderer
 docs/          README images

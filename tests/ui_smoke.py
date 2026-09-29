@@ -161,7 +161,8 @@ check(w.last_output != outp and Path(w.last_output).exists(),
 w.timeline.mark_in, w.timeline.mark_out = 0, min(40_000, w.info.duration_ms)
 w.export_discord()
 dst = w.job.dst
-pump(1.5)
+# first update arrives after the encoder probe + ffmpeg start; wait for it
+wait_for(lambda: w.progress.value() > 0, 15, "first progress update")
 check(w.progress.isVisible() and w.progress.value() > 0,
       f"progress bar moving ({w.progress.value() / 10:.0f}%)")
 w.grab().save(str(out / "04_exporting.png"))
