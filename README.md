@@ -64,6 +64,12 @@ Measured on a real 1440p60 AV1 OBS clip (51.5 s, 415 MB lossless):
   ½ speed → ¼ speed → fine (about 3 ms per pixel, finer than one 60 fps
   frame). A badge above the playhead shows the active speed, and moving
   back up returns to full speed without jumping.
+- **Frame-exact scrubbing**: dragging never waits on the video player.
+  A scrub engine decodes whole keyframe-to-keyframe chunks into RAM
+  (first frame in ~100 ms, then every frame in the chunk is instant) and
+  the preview shows the true frame for each playhead position, 1:1 with
+  the bar. Releasing the mouse hands the exact position back to normal
+  playback. Uses up to ~420 MB of RAM while scrubbing, freed on close.
 - **Timeline**: thumbnails, time ruler, green in-handle and red
   out-handle. Scroll to zoom around the cursor (Shift+scroll pans,
   double-click resets). The thin strip underneath is always the whole
@@ -152,6 +158,7 @@ python tests/ui_smoke.py <clip.mp4>           # drives the window: marks, zoom, 
 python tests/quality_compare.py <clip.mp4>    # side-by-side frame + color tags
 python tests/check_misc.py <clip.mp4>         # GIF ladder, frame-accurate, handles, snapshot
 python tests/check_v21.py <clip.mp4>          # fine scrubbing, folder nav, OLED theme
+python tests/check_scrub.py <clip.mp4>        # scrub engine: latency, exactness, cache, UI
 python tests/check_portable.py <app_dir> <clip.mp4>  # stripped PATH, no NVENC: bundled ffmpeg + x264
 python tests/accept_installed.py <clip.mp4>   # installed app, real 'D' keypress, checks output
 python tests/make_screenshot.py <clip.mp4>    # regenerates docs/screenshot.png

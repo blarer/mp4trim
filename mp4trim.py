@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
 DISCORD_TIERS = [("Free · 10 MB", 10), ("Nitro Basic · 50 MB", 50),
                  ("Nitro · 500 MB", 500)]
@@ -639,6 +639,219 @@ class FrameGrabber(QThread):
                     self.ready.emit(img)
 
 
+class ScrubEngine(QThread):
+    """Frame-exact scrubbing: decodes whole GOPs into RAM once, then serves
+    any frame in them instantly.
+
+    Seeking the media player for every mouse move forces a keyframe seek plus
+    a decode of up to a full GOP per request, which lags far behind the bar.
+    Instead, the first request inside a GOP starts one ffmpeg process that
+    decodes that GOP front-to-back into an in-memory frame list (streamed, so
+    early frames are usable while later ones still decode), and every further
+    request in the GOP is a plain list lookup. An LRU keeps the last few GOPs
+    (~{cap} MB). The decoder is aborted when the target moves to a different,
+    non-adjacent GOP.
+    """
+
+    frame_ready = Signal(int, QImage)   # (ms requested, frame)
+
+    WIDTH = 768
+    CACHE_MB = 420
+    MAX_GOP_FRAMES = 600
+
+    def __init__(self):
+        super().__init__()
+        self._lock = threading.Lock()
+        self._evt = threading.Event()
+        self._stop = False
+        self._proc: subprocess.Popen | None = None
+        self._info: MediaInfo | None = None
+        self._kfs: list[int] = []
+        self._req_ms: int | None = None
+        self._cache: dict[int, list[QImage]] = {}   # kf index -> frames
+        self._complete: set[int] = set()
+        self._lru: list[int] = []
+        self._decoding: int | None = None
+
+    # ---- API (UI thread) ----
+    def set_source(self, info: MediaInfo | None, kfs: list[int]):
+        with self._lock:
+            self._info, self._kfs = info, list(kfs)
+            self._cache.clear()
+            self._complete.clear()
+            self._lru.clear()
+            self._req_ms = None
+        self._kill_proc()
+        self._evt.set()
+
+    @property
+    def ready(self) -> bool:
+        return self._info is not None and len(self._kfs) > 0
+
+    def request(self, ms: int) -> bool:
+        """Ask for the frame at ms. Returns True if served from cache now."""
+        with self._lock:
+            info = self._info
+            if info is None or not self._kfs:
+                return False
+            gi, fi = self._locate(ms)
+            frames = self._cache.get(gi)
+            if frames is not None and fi < len(frames):
+                img = frames[fi]
+                self._touch(gi)
+                self._req_ms = None
+                exact = True
+            else:
+                # provisional: show the nearest decoded frame of this GOP
+                # right away so fast sweeps stay live; the exact frame is
+                # emitted by the decoder as soon as it reaches it
+                img = frames[-1] if frames else None
+                exact = False
+                self._req_ms = ms
+        if img is not None:
+            self.frame_ready.emit(ms, img)
+        if exact:
+            return True
+        self._evt.set()
+        return False
+
+    def stop(self):
+        self._stop = True
+        self._evt.set()
+        self._kill_proc()
+        self.wait(4000)
+
+    # ---- internals ----
+    def _locate(self, ms: int) -> tuple[int, int]:
+        """(keyframe index, frame offset inside that GOP) for a time."""
+        info, kfs = self._info, self._kfs
+        gi = max(bisect.bisect_right(kfs, ms) - 1, 0)
+        fps = info.fps or 60.0
+        fi = max(int((ms - kfs[gi]) * fps / 1000 + 1e-6), 0)
+        return gi, min(fi, self.MAX_GOP_FRAMES - 1)
+
+    def _gop_span(self, gi: int) -> tuple[int, int]:
+        kfs, info = self._kfs, self._info
+        start = kfs[gi]
+        end = kfs[gi + 1] if gi + 1 < len(kfs) else info.duration_ms
+        return start, end
+
+    def _touch(self, gi: int):
+        if gi in self._lru:
+            self._lru.remove(gi)
+        self._lru.append(gi)
+
+    def _evict(self, frame_bytes: int):
+        cap = self.CACHE_MB * 1_048_576
+        total = sum(len(v) for v in self._cache.values()) * frame_bytes
+        while total > cap and len(self._lru) > 1:
+            old = self._lru.pop(0)
+            total -= len(self._cache.pop(old, ())) * frame_bytes
+            self._complete.discard(old)
+
+    def _kill_proc(self):
+        p = self._proc
+        if p and p.poll() is None:
+            p.kill()
+
+    def run(self):
+        while not self._stop:
+            self._evt.wait()
+            self._evt.clear()
+            if self._stop:
+                break
+            with self._lock:
+                info, req = self._info, self._req_ms
+                if info is None or not self._kfs or req is None:
+                    continue
+                gi, _ = self._locate(req)
+                if gi in self._complete:
+                    self._req_ms = None
+                    continue
+            self._decode_gop(gi)
+
+    def _decode_gop(self, gi: int):
+        with self._lock:
+            info = self._info
+            start, end = self._gop_span(gi)
+            fps = info.fps or 60.0
+            n = min(max(int(round((end - start) * fps / 1000)), 1),
+                    self.MAX_GOP_FRAMES)
+            w = min(self.WIDTH, info.width or self.WIDTH)
+            w -= w % 2
+            h = max(int(round((info.height or 1) * w / (info.width or 1) / 2))
+                    * 2, 2)
+            frames = self._cache.setdefault(gi, [])
+            self._touch(gi)
+            self._evict(w * h * 3)
+            done = len(frames)
+            hdr, path, start_s = info.hdr, info.path, info.start_s
+            self._decoding = gi
+        if done >= n:
+            with self._lock:
+                self._complete.add(gi)
+            return
+        vf = f"scale={w}:{h}"
+        if hdr:
+            vf += f",{TONEMAP}"
+        seek = (start + done * 1000 / fps) / 1000 + start_s
+        cmd = [tool("ffmpeg"), "-v", "error", "-hwaccel", "auto",
+               "-ss", f"{seek:.4f}", "-i", path, "-frames:v", str(n - done),
+               "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL,
+                                    creationflags=CREATE_NO_WINDOW)
+        except OSError:
+            return
+        self._proc = proc
+        frame_bytes = w * h * 3
+        try:
+            while not self._stop:
+                buf = proc.stdout.read(frame_bytes)
+                if len(buf) < frame_bytes:
+                    break
+                img = QImage(buf, w, h, w * 3, QImage.Format_RGB888).copy()
+                emit = None
+                abort = False
+                with self._lock:
+                    frames.append(img)
+                    req = self._req_ms
+                    if req is not None:
+                        rgi, rfi = self._locate(req)
+                        if rgi == gi and rfi < len(frames):
+                            emit = (req, frames[rfi])
+                            self._req_ms = None
+                        elif rgi != gi:
+                            # target left this GOP: keep partial, go decode it
+                            abort = True
+                if emit:
+                    self.frame_ready.emit(*emit)
+                if abort:
+                    proc.kill()
+                    return
+                if len(frames) >= n:
+                    break
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.stdout.close()
+            self._proc = None
+        emit = None
+        with self._lock:
+            if len(frames) >= n:
+                self._complete.add(gi)
+                # serve a request that waited on the tail of this GOP
+                req = self._req_ms
+                if req is not None:
+                    rgi, rfi = self._locate(req)
+                    if rgi == gi:
+                        emit = (req, frames[min(rfi, len(frames) - 1)])
+                        self._req_ms = None
+        if emit:
+            self.frame_ready.emit(*emit)
+
+
 # ------------------------------------------------------------------- style
 
 STYLE = """
@@ -736,6 +949,7 @@ class Timeline(QWidget):
 
     seeked = Signal(int)
     range_changed = Signal()
+    drag_state = Signal(bool)   # True while the mouse holds playhead/handle
 
     RULER = 18
     OVERVIEW = 8
@@ -822,6 +1036,7 @@ class Timeline(QWidget):
         if e.button() != Qt.LeftButton:
             return
         self._drag = self._hit(e.position().x())
+        self.drag_state.emit(True)
         self._apply_drag(e.position().x())
         # anchor for fine scrubbing at the (possibly jumped-to) value
         self._rate = 1.0
@@ -853,6 +1068,8 @@ class Timeline(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, _):
+        if self._drag:
+            self.drag_state.emit(False)
         self._drag = None
         self._rate = 1.0
         self.update()
@@ -1239,10 +1456,19 @@ class Trimmer(QMainWindow):
         self._frame_timer = QTimer(self, singleShot=True, interval=60)
         self._frame_timer.timeout.connect(self.update_frame)
 
+        # frame-exact scrubbing (GOP cache). During a drag the preview stack
+        # switches to frame_label and shows engine frames; the media player
+        # is only seeked once, on release.
+        self.scrub = ScrubEngine()
+        self.scrub.frame_ready.connect(self._on_scrub_frame)
+        self.scrub.start()
+        self._scrubbing = False
+
         # --- timeline ---
         self.timeline = Timeline()
         self.timeline.seeked.connect(self.seek)
         self.timeline.range_changed.connect(self.refresh_range)
+        self.timeline.drag_state.connect(self._on_drag_state)
 
         # --- transport row ---
         def btn(text, tip, slot, name=None):
@@ -1544,6 +1770,10 @@ class Trimmer(QMainWindow):
         self.info = info
         self.position = 0
         self.keyframes = []
+        self._scrubbing = False
+        self.scrub.set_source(None, [])
+        self.frame_label.clear()
+        self.frame_label.setText("")
         self.timeline.reset(info.duration_ms)
         self.settings.setValue("last_dir", str(Path(path).parent))
         self._push_recent(path)
@@ -1585,6 +1815,7 @@ class Trimmer(QMainWindow):
     def _on_keyframes(self, gen: int, kfs: list):
         if gen == self._gen:
             self.keyframes = kfs
+            self.scrub.set_source(self.info, kfs)
             self.refresh_range()
 
     def _on_thumb(self, gen: int, ms: int, img: QImage):
@@ -1686,12 +1917,49 @@ class Trimmer(QMainWindow):
         if not self.info:
             return
         self.position = int(min(max(ms, 0), self.info.duration_ms))
-        if self.fallback:
+        if self._scrubbing and self.scrub.ready:
+            # frame-exact path: serve from the GOP cache, never the player
+            self.scrub.request(self.position)
+        elif self.fallback:
             self._frame_timer.start()
         else:
             self.player.setPosition(self.position)
         self.timeline.follow(self.position)
         self.refresh_pos()
+
+    # ---- frame-exact scrubbing ----
+
+    def _on_drag_state(self, dragging: bool):
+        if not self.info:
+            return
+        if dragging:
+            self._scrubbing = True
+            if not self.fallback:
+                if self.player.playbackState() == QMediaPlayer.PlayingState:
+                    self.player.pause()
+                if self.scrub.ready:
+                    self.stack.setCurrentIndex(1)   # engine frames here
+            if self.scrub.ready:
+                self.scrub.request(self.position)
+            elif self.fallback:
+                self._frame_timer.start()
+        else:
+            self._scrubbing = False
+            if self.fallback:
+                self._frame_timer.start()
+            else:
+                # one real seek so playback resumes exactly here
+                self.player.setPosition(self.position)
+                self.stack.setCurrentIndex(0)
+
+    def _on_scrub_frame(self, ms: int, img: QImage):
+        # drop frames that arrive after the playhead moved a lot further
+        if abs(ms - self.position) > 1000:
+            return
+        if self._scrubbing or self.fallback:
+            self.frame_label.setPixmap(QPixmap.fromImage(img).scaled(
+                self.frame_label.size(), Qt.KeepAspectRatio,
+                Qt.SmoothTransformation))
 
     def step_frames(self, n: int):
         if not self.info:
@@ -1702,7 +1970,10 @@ class Trimmer(QMainWindow):
 
     def update_frame(self):
         if self.info and self.fallback:
-            self.grabber.request(self.info.path, self.position, self.info.hdr)
+            # prefer the cache in fallback mode too; miss = async ffmpeg grab
+            if not (self.scrub.ready and self.scrub.request(self.position)):
+                self.grabber.request(self.info.path, self.position,
+                                     self.info.hdr)
 
     def _show_frame(self, img: QImage):
         if self.fallback:
@@ -1957,6 +2228,7 @@ class Trimmer(QMainWindow):
         for t in list(self._threads):
             t.wait(3000)
         self.grabber.stop()
+        self.scrub.stop()
         self.player.stop()
         super().closeEvent(e)
 
