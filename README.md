@@ -29,7 +29,13 @@ one-click exports that actually fit Discord's upload limit.
 Every export is copied to the clipboard as a file, so Ctrl+V drops it
 straight into Discord. **Show in folder** appears in the status bar.
 
-Pick your tier (Free 10 MB, Nitro Basic 50 MB, Nitro 500 MB) in the
+**Auto-update**: on launch the app quietly checks the GitHub releases
+page. When a newer version exists it downloads the installer in the
+background and shows an "Update to X" button in the status bar; one
+click installs it and restarts. Manual check: **Help -> Check for
+updates**. Set MP4TRIM_NO_UPDATE=1 to disable.
+
+Pick your tier (Free 20 MB, Nitro Basic 50 MB, Nitro 1 GB) in the
 **Discord limit** box. It is remembered between runs.
 
 ### How Discord MP4 picks quality
@@ -37,7 +43,7 @@ Pick your tier (Free 10 MB, Nitro Basic 50 MB, Nitro 500 MB) in the
 The range label shows the plan live as you drag the handles, for example
 `Lossless ≈ 415 MB · Discord 50 MB → 1080p60 · 7.0 Mbps ✓`.
 
-1. Budget = 93% of the limit, minus audio (128 kbps, 96 on the 10 MB tier).
+1. Budget = 93% of the limit, minus audio (128 kbps, 96 on the free tier).
 2. Video bitrate = budget ÷ length, never above the source's own bitrate.
 3. Highest resolution/fps that still looks clean at that bitrate:
    1440p60 → 1080p60 → 1080p30 → 720p60 → 720p30 → 540p30 → 480p30.
@@ -50,9 +56,9 @@ Measured on a real 1440p60 AV1 OBS clip (51.5 s, 415 MB lossless):
 
 | Tier | Result |
 | --- | --- |
-| 10 MB | 9.4 MB, 540p30 |
+| 20 MB | ~19 MB, 720p60 |
 | 50 MB | 47.3 MB, 1080p60 |
-| 500 MB | 439 MB, 1440p60 (source bitrate, nothing to cut) |
+| 1 GB | 439 MB, 1440p60 (source bitrate, nothing to cut) |
 
 ## Editing
 
@@ -158,6 +164,8 @@ python tests/ui_smoke.py <clip.mp4>           # drives the window: marks, zoom, 
 python tests/quality_compare.py <clip.mp4>    # side-by-side frame + color tags
 python tests/check_misc.py <clip.mp4>         # GIF ladder, frame-accurate, handles, snapshot
 python tests/check_v21.py <clip.mp4>          # fine scrubbing, folder nav, OLED theme
+python tests/check_update.py                  # auto-updater: feed rules, download, UI
+python tests/check_tiers.py <clip.mp4>        # Discord tier limits on a real clip
 python tests/check_scrub.py <clip.mp4>        # scrub engine: latency, exactness, cache, UI
 python tests/check_portable.py <app_dir> <clip.mp4>  # stripped PATH, no NVENC: bundled ffmpeg + x264
 python tests/accept_installed.py <clip.mp4>   # installed app, real 'D' keypress, checks output

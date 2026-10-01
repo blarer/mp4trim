@@ -113,12 +113,12 @@ tl.reset_zoom()
 check(not tl.zoomed, "zoom reset")
 
 # tiers update the estimate
-for limit in (10, 50, 500):
-    w.combo_tier.setCurrentIndex([10, 50, 500].index(limit))
+for limit in (20, 50, 1000):
+    w.combo_tier.setCurrentIndex([20, 50, 1000].index(limit))
     pump(0.05)
     check(f"Discord {limit} MB" in w.lbl_est.text() or "too long" in w.lbl_est.text(),
           f"estimate reflects {limit} MB tier")
-check(w.discord_limit() == 500 and w.tier_actions[2][0].isChecked(),
+check(w.discord_limit() == 1000 and w.tier_actions[2][0].isChecked(),
       "combo and menu tier stay in sync")
 w.combo_tier.setCurrentIndex(1)
 

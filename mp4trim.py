@@ -44,10 +44,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
+UPDATE_REPO = "blarer/mp4trim"   # GitHub repo the auto-updater watches
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
-DISCORD_TIERS = [("Free · 10 MB", 10), ("Nitro Basic · 50 MB", 50),
-                 ("Nitro · 500 MB", 500)]
+DISCORD_TIERS = [("Free · 20 MB", 20), ("Nitro Basic · 50 MB", 50),
+                 ("Nitro · 1 GB", 1000)]
 TARGET_FILL = 0.93          # aim for 93% of the limit, leaves room for drift
 MIN_VIDEO_KBPS = 300        # below this the result is not worth sending
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".webm", ".avi", ".ts"}
@@ -292,7 +293,7 @@ RUNGS = [(1440, 60, 14000), (1080, 60, 6500), (1080, 30, 4200),
 def audio_kbps_for(limit_mb: float, tracks: int) -> int:
     if tracks == 0:
         return 0
-    return 96 if limit_mb <= 10 else 128
+    return 96 if limit_mb <= 20 else 128
 
 
 def plan_discord(keep_ms: int, limit_mb: float, info: MediaInfo) -> DiscordPlan:
@@ -469,7 +470,7 @@ def export_discord(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
 
 def export_gif(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
                limit_mb: float):
-    ladder = (GIF_HQ_LADDER + GIF_LADDER) if limit_mb > 10 else GIF_LADDER
+    ladder = (GIF_HQ_LADDER + GIF_LADDER) if limit_mb > 20 else GIF_LADDER
     limit_bytes = limit_mb * 1e6
     size = 0
     for i, (width, fps) in enumerate(ladder, 1):
@@ -850,6 +851,97 @@ class ScrubEngine(QThread):
                         self._req_ms = None
         if emit:
             self.frame_ready.emit(*emit)
+
+
+# ---------------------------------------------------------------- updater
+
+def _ver_tuple(v: str) -> tuple[int, ...]:
+    out = []
+    for part in v.strip().lstrip("v").split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def pick_update(feed: dict, current: str) -> dict | None:
+    """From a GitHub 'latest release' API response, the MSI to update to.
+
+    Returns {"version", "url", "size", "notes"} or None if current is up to
+    date, the release is a draft/prerelease, or it carries no MSI asset.
+    """
+    if not isinstance(feed, dict) or feed.get("draft") or feed.get("prerelease"):
+        return None
+    tag = str(feed.get("tag_name") or "")
+    if not tag or _ver_tuple(tag) <= _ver_tuple(current):
+        return None
+    asset = next((a for a in feed.get("assets", ())
+                  if str(a.get("name", "")).lower().endswith(".msi")
+                  and "win64" in str(a.get("name", "")).lower()), None)
+    if not asset:
+        return None
+    return {"version": tag.lstrip("v"),
+            "url": asset["browser_download_url"],
+            "size": int(asset.get("size") or 0),
+            "notes": str(feed.get("body") or "")[:2000]}
+
+
+class UpdateChecker(QThread):
+    """Checks GitHub for a newer release and downloads the MSI.
+
+    Runs once at startup (and on demand from the Help menu). Never interrupts:
+    when the MSI is downloaded and size-verified it just offers a button.
+    MP4TRIM_NO_UPDATE=1 disables it; MP4TRIM_UPDATE_FEED points the check at
+    a local JSON file for tests.
+    """
+
+    update_ready = Signal(str, str)   # version, path to downloaded MSI
+    no_update = Signal(str)           # status message (for manual checks)
+
+    def __init__(self, manual: bool = False):
+        super().__init__()
+        self.manual = manual
+
+    def run(self):
+        import json as _json
+        import urllib.request
+        if os.environ.get("MP4TRIM_NO_UPDATE"):
+            return
+        try:
+            feed_src = os.environ.get("MP4TRIM_UPDATE_FEED")
+            if feed_src:
+                feed = _json.loads(Path(feed_src).read_text(encoding="utf-8"))
+            else:
+                req = urllib.request.Request(
+                    f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
+                    headers={"User-Agent": f"mp4trim/{APP_VERSION}",
+                             "Accept": "application/vnd.github+json"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    feed = _json.loads(r.read().decode("utf-8"))
+            upd = pick_update(feed, APP_VERSION)
+            if not upd:
+                self.no_update.emit(f"mp4trim {APP_VERSION} is up to date")
+                return
+            dst = Path(tempfile.gettempdir()) / f"mp4trim-{upd['version']}-update.msi"
+            if not (dst.exists() and upd["size"]
+                    and dst.stat().st_size == upd["size"]):
+                tmp = dst.with_suffix(".part")
+                urllib.request.urlretrieve(upd["url"], tmp)
+                if upd["size"] and tmp.stat().st_size != upd["size"]:
+                    tmp.unlink(missing_ok=True)
+                    self.no_update.emit("Update download was incomplete")
+                    return
+                tmp.replace(dst)
+            self.update_ready.emit(upd["version"], str(dst))
+        except Exception as e:  # noqa: BLE001 - updates must never crash the app
+            if self.manual:
+                self.no_update.emit(f"Update check failed: {e}")
+
+
+def launch_update(msi_path: str):
+    """Hand the MSI to msiexec and exit. Per-user install, silent-ish."""
+    subprocess.Popen(
+        ["msiexec", "/i", msi_path, "/passive", "/norestart"],
+        creationflags=0x00000008)   # DETACHED_PROCESS: survives our exit
 
 
 # ------------------------------------------------------------------- style
@@ -1595,15 +1687,58 @@ class Trimmer(QMainWindow):
         sb.addPermanentWidget(self.btn_cancel)
 
         self._build_menu()
-        saved = float(self.settings.value("discord_limit", 10.0))
+        saved = float(self.settings.value("discord_limit", 20.0))
+        saved = {10.0: 20.0, 500.0: 1000.0}.get(saved, saved)  # Aug 2026 bump
         self.set_discord_limit(saved if saved in [m for _, m in DISCORD_TIERS]
-                               else 10.0)
+                               else 20.0)
         self.update_controls()
         if have_ffmpeg():
             sb.showMessage("Ready · drop a video to start")
         else:
             sb.showMessage("ffmpeg not found · install it: winget install Gyan.FFmpeg")
             QTimer.singleShot(0, self._warn_no_ffmpeg)
+
+        # auto-update: quiet startup check 3 s after launch
+        self._updater: UpdateChecker | None = None
+        self._update_msi: str | None = None
+        self.btn_update = btn("", "Install the downloaded update and restart "
+                              "mp4trim", self.apply_update, "accent")
+        self.btn_update.hide()
+        sb.addPermanentWidget(self.btn_update)
+        QTimer.singleShot(3000, lambda: self.check_updates(manual=False))
+
+    # ------------------------------------------------------------ updates
+
+    def check_updates(self, manual: bool = True):
+        if self._updater and self._updater.isRunning():
+            return
+        u = UpdateChecker(manual=manual)
+        u.update_ready.connect(self._on_update_ready)
+        if manual:
+            u.no_update.connect(self.statusBar().showMessage)
+        u.finished.connect(lambda: None)
+        self._updater = u
+        if manual:
+            self.statusBar().showMessage("Checking for updates…")
+        u.start()
+
+    def _on_update_ready(self, version: str, msi: str):
+        self._update_msi = msi
+        self.btn_update.setText(f"⬆ Update to {version}")
+        self.btn_update.show()
+        self.statusBar().showMessage(
+            f"mp4trim {version} is ready to install (you have {APP_VERSION})")
+
+    def apply_update(self):
+        if not self._update_msi or not Path(self._update_msi).exists():
+            return
+        if self.job:
+            QMessageBox.information(
+                self, "mp4trim", "An export is running. The update will "
+                "install after you finish or cancel it.")
+            return
+        launch_update(self._update_msi)
+        self.close()
 
     # ---------------------------------------------------------------- menu
 
@@ -1686,6 +1821,7 @@ class Trimmer(QMainWindow):
 
         m_help = mb.addMenu("&Help")
         m_help.addAction(self._act("&Keyboard shortcuts", self.show_shortcuts, "F1"))
+        m_help.addAction(self._act("Check for &updates", self.check_updates))
         m_help.addAction(self._act("&About", self.show_about))
 
     def _rebuild_recent(self):
@@ -2076,7 +2212,7 @@ class Trimmer(QMainWindow):
     # ------------------------------------------------------------ exports
 
     def discord_limit(self) -> float:
-        return float(self.settings.value("discord_limit", 10.0))
+        return float(self.settings.value("discord_limit", 20.0))
 
     def set_discord_limit(self, mb: float):
         mb = float(mb)
@@ -2186,7 +2322,7 @@ class Trimmer(QMainWindow):
             return
         info, t_in, t_out = self.info, self.timeline.mark_in, self.timeline.mark_out
         limit = self.discord_limit()
-        if limit <= 10 and t_out - t_in > 60_000:
+        if limit <= 20 and t_out - t_in > 60_000:
             if QMessageBox.question(
                     self, "mp4trim",
                     "Selection is over a minute. GIFs that long get huge and "
