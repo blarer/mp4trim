@@ -16,8 +16,10 @@ Keys:   Space play/pause   I / O set in/out   Home / End go to in/out
 """
 
 import bisect
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,7 +46,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 UPDATE_REPO = "blarer/mp4trim"   # GitHub repo the auto-updater watches
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
 DISCORD_TIERS = [("Free · 20 MB", 20), ("Nitro Basic · 50 MB", 50),
@@ -640,6 +642,42 @@ class FrameGrabber(QThread):
                     self.ready.emit(img)
 
 
+class SnapGrabber(QThread):
+    """One-shot native-resolution frame grab off the UI thread."""
+
+    done = Signal(object)   # QImage | None
+
+    def __init__(self, path: str, ms: int, hdr: bool):
+        super().__init__()
+        self.path, self.ms, self.hdr = path, ms, hdr
+
+    def run(self):
+        try:
+            img = grab_frame(self.path, self.ms, native=True, hdr=self.hdr)
+        except Exception:  # noqa: BLE001
+            img = None
+        self.done.emit(img)
+
+
+class ProbeWorker(QThread):
+    """Runs probe() off the UI thread so rapid clip flipping stays smooth."""
+
+    ok = Signal(int, str, object)    # gen, path, MediaInfo
+    fail = Signal(int, str, str)     # gen, path, error text
+
+    def __init__(self, gen: int, path: str):
+        super().__init__()
+        self.gen, self.path = gen, path
+
+    def run(self):
+        try:
+            info = probe(self.path)
+        except Exception as e:  # noqa: BLE001
+            self.fail.emit(self.gen, self.path, str(e))
+            return
+        self.ok.emit(self.gen, self.path, info)
+
+
 class ScrubEngine(QThread):
     """Frame-exact scrubbing: decodes whole GOPs into RAM once, then serves
     any frame in them instantly.
@@ -879,9 +917,12 @@ def pick_update(feed: dict, current: str) -> dict | None:
                   and "win64" in str(a.get("name", "")).lower()), None)
     if not asset:
         return None
+    sha = re.search(r"\b[0-9a-f]{64}\b", str(feed.get("body") or ""),
+                    re.IGNORECASE)
     return {"version": tag.lstrip("v"),
             "url": asset["browser_download_url"],
             "size": int(asset.get("size") or 0),
+            "sha256": sha.group(0).lower() if sha else None,
             "notes": str(feed.get("body") or "")[:2000]}
 
 
@@ -904,10 +945,11 @@ class UpdateChecker(QThread):
     def run(self):
         import json as _json
         import urllib.request
-        if os.environ.get("MP4TRIM_NO_UPDATE"):
+        feed_src = os.environ.get("MP4TRIM_UPDATE_FEED")
+        # an explicit test feed overrides the kill switch (run_all sets it)
+        if os.environ.get("MP4TRIM_NO_UPDATE") and not feed_src:
             return
         try:
-            feed_src = os.environ.get("MP4TRIM_UPDATE_FEED")
             if feed_src:
                 feed = _json.loads(Path(feed_src).read_text(encoding="utf-8"))
             else:
@@ -931,6 +973,12 @@ class UpdateChecker(QThread):
                     self.no_update.emit("Update download was incomplete")
                     return
                 tmp.replace(dst)
+            if upd.get("sha256"):
+                digest = hashlib.sha256(dst.read_bytes()).hexdigest()
+                if digest != upd["sha256"]:
+                    dst.unlink(missing_ok=True)
+                    self.no_update.emit("Update failed verification")
+                    return
             self.update_ready.emit(upd["version"], str(dst))
         except Exception as e:  # noqa: BLE001 - updates must never crash the app
             if self.manual:
@@ -1519,6 +1567,9 @@ class Trimmer(QMainWindow):
         self._prime = False
         self._gen = 0
         self._analyzer: Analyzer | None = None
+        self._load_gen = 0
+        self._prober: ProbeWorker | None = None
+        self._snapper: SnapGrabber | None = None
         self._threads: list[QThread] = []   # keep stopped threads alive
 
         # --- playback ---
@@ -1706,6 +1757,11 @@ class Trimmer(QMainWindow):
         self.btn_update.hide()
         sb.addPermanentWidget(self.btn_update)
         QTimer.singleShot(3000, lambda: self.check_updates(manual=False))
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(24 * 60 * 60 * 1000)
+        self._update_timer.timeout.connect(
+            lambda: self.check_updates(manual=False))
+        self._update_timer.start()
 
     # ------------------------------------------------------------ updates
 
@@ -1898,11 +1954,29 @@ class Trimmer(QMainWindow):
         if not have_ffmpeg():
             self._warn_no_ffmpeg()
             return
-        try:
-            info = probe(path)
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "mp4trim", f"Could not open this file:\n{e}")
+        self._load_gen += 1
+        self.statusBar().showMessage(f"Loading {Path(path).name}…")
+        w = ProbeWorker(self._load_gen, path)
+        w.ok.connect(self._on_probe_ok)
+        w.fail.connect(self._on_probe_fail)
+        w.finished.connect(lambda w=w: self._threads.remove(w)
+                           if w in self._threads else None)
+        self._threads.append(w)
+        self._prober = w
+        w.start()
+
+    def _on_probe_ok(self, gen: int, path: str, info):
+        if gen != self._load_gen:
             return
+        self._finish_load(path, info)
+
+    def _on_probe_fail(self, gen: int, path: str, err: str):
+        if gen != self._load_gen:
+            return
+        self.statusBar().clearMessage()
+        QMessageBox.warning(self, "mp4trim", f"Could not open this file:\n{err}")
+
+    def _finish_load(self, path: str, info: MediaInfo):
         self.info = info
         self.position = 0
         self.keyframes = []
@@ -2338,13 +2412,27 @@ class Trimmer(QMainWindow):
         if not self.info:
             return
         self.player.pause()
-        img = grab_frame(self.info.path, self.position, native=True,
-                         hdr=self.info.hdr)
+        if self._snapper and self._snapper.isRunning():
+            return
+        path, ms = self.info.path, self.position
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        w = SnapGrabber(path, ms, self.info.hdr)
+        w.done.connect(lambda img, p=path, m=ms: self._snap_done(img, p, m))
+        w.finished.connect(lambda w=w: self._threads.remove(w)
+                           if w in self._threads else None)
+        self._threads.append(w)
+        self._snapper = w
+        w.start()
+
+    def _snap_done(self, img, path: str, ms: int):
+        QApplication.restoreOverrideCursor()
+        if not self.info or self.info.path != path:
+            return   # a different file was loaded meanwhile
         if img is None:
             QMessageBox.warning(self, "mp4trim", "Could not grab this frame.")
             return
-        src = Path(self.info.path)
-        default = str(src.with_name(f"{src.stem}_{fmt_tag(self.position)}.png"))
+        src = Path(path)
+        default = str(src.with_name(f"{src.stem}_{fmt_tag(ms)}.png"))
         SnapshotDialog(img, default, self).exec()
 
     # ------------------------------------------------------------ closing
@@ -2361,6 +2449,8 @@ class Trimmer(QMainWindow):
         self.settings.setValue("geometry", self.saveGeometry())
         if self._analyzer:
             self._analyzer.stop()
+        if self._updater is not None and self._updater.isRunning():
+            self._updater.wait(2000)
         for t in list(self._threads):
             t.wait(3000)
         self.grabber.stop()

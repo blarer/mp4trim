@@ -120,9 +120,12 @@ check(w.btn_update.isVisible() and "99.0.0" in w.btn_update.text(),
       f"update button shown ({w.btn_update.text()!r})")
 launched = []
 m.launch_update = lambda p: launched.append(p)
+# the job-running path shows a modal box; stub it or the test blocks forever
+infos = []
+m.QMessageBox.information = staticmethod(lambda *a, **k: infos.append(a))
 w.job = object()   # pretend an export is running
 w.apply_update()
-check(not launched, "apply blocked while a job runs")
+check(not launched and infos, "apply blocked while a job runs (modal stubbed)")
 w.job = None
 w.apply_update()
 check(launched and launched[0] == w._update_msi, "apply launches installer + closes")

@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia*=false")
+os.environ["MP4TRIM_NO_UPDATE"] = "1"
 
 from PySide6.QtCore import QPointF, Qt, QTimer  # noqa: E402
 from PySide6.QtGui import QWheelEvent  # noqa: E402
@@ -65,6 +66,7 @@ def wait_for(pred, sec, what):
 
 
 w.load(clip)
+wait_for(lambda: w.info is not None, 15, "async load")
 check(w.info is not None, "clip loaded")
 check(wait_for(lambda: len(w.keyframes) > 0, 20, "keyframes"), "keyframes indexed")
 check(wait_for(lambda: len(w.timeline._thumb_ms) >= 35, 60, "thumbs"),
@@ -113,12 +115,14 @@ tl.reset_zoom()
 check(not tl.zoomed, "zoom reset")
 
 # tiers update the estimate
-for limit in (20, 50, 1000):
-    w.combo_tier.setCurrentIndex([20, 50, 1000].index(limit))
+tier_limits = [mb for _, mb in m.DISCORD_TIERS]
+for limit in tier_limits:
+    w.combo_tier.setCurrentIndex(tier_limits.index(limit))
     pump(0.05)
     check(f"Discord {limit} MB" in w.lbl_est.text() or "too long" in w.lbl_est.text(),
           f"estimate reflects {limit} MB tier")
-check(w.discord_limit() == 1000 and w.tier_actions[2][0].isChecked(),
+check(w.discord_limit() == tier_limits[-1] and
+      w.tier_actions[len(tier_limits) - 1][0].isChecked(),
       "combo and menu tier stay in sync")
 w.combo_tier.setCurrentIndex(1)
 

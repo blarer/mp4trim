@@ -2,6 +2,7 @@
 
     py -3.12 tests/check_v21.py <clip.mp4>
 """
+import os
 import shutil
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ["MP4TRIM_NO_UPDATE"] = "1"
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402

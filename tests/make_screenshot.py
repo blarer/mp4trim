@@ -5,6 +5,7 @@
 Uses ffmpeg preview mode so the video area shows a real frame (a
 QVideoWidget cannot be grabbed off-screen).
 """
+import os
 import shutil
 import sys
 import tempfile
@@ -13,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+os.environ["MP4TRIM_NO_UPDATE"] = "1"
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import mp4trim as m  # noqa: E402

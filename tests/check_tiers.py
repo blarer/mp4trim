@@ -10,7 +10,7 @@ src = sys.argv[1]
 info = m.probe(src)
 tmp = tempfile.mkdtemp(prefix="mp4trim-tiers-")
 fails = 0
-for limit in (20, 50, 1000):
+for limit in [mb for _, mb in m.DISCORD_TIERS]:
     dst = os.path.join(tmp, f"t{limit}.mp4")
     p, msg, ok = m.export_discord(lambda a, s, l: m.run_ffmpeg(a, s, l),
                                   info, 0, info.duration_ms, dst, limit, False)

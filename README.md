@@ -159,6 +159,7 @@ These run against real clips (they encode video, so they are not a fast
 unit suite):
 
 ```
+python tests/run_all.py <clip.mp4>            # recommended: all suites below, timeouts + summary table (--fast skips the two slow export suites)
 python tests/check_exports.py <clip.mp4> ...   # every tier: size, codec, audio, duration
 python tests/ui_smoke.py <clip.mp4>           # drives the window: marks, zoom, export, cancel
 python tests/quality_compare.py <clip.mp4>    # side-by-side frame + color tags

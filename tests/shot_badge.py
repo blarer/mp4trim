@@ -1,9 +1,11 @@
 """Grab a screenshot of the fine-scrub badge during a simulated drag."""
+import os
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ["MP4TRIM_NO_UPDATE"] = "1"
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402

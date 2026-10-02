@@ -75,7 +75,8 @@ def main(clips):
               f"{info.fps:.0f}fps {info.v_codec} {info.total_kbps / 1000:.0f} Mbps "
               f"{info.duration_ms / 1000:.1f}s audio={info.audio_tracks}")
         full = (0, info.duration_ms)
-        for limit in (10, 50, 500):
+        limits = [mb for _, mb in m.DISCORD_TIERS]
+        for limit in limits:
             plan = m.plan_discord(full[1] - full[0], limit, info)
             if plan.ok:
                 discord_case(info, *full, limit, tmp)
@@ -87,11 +88,12 @@ def main(clips):
                 cut = int(plan.max_keep_s * 1000 * 0.9)
                 discord_case(info, 0, cut, limit, tmp)
         if info.audio_tracks > 1:
-            discord_case(info, 0, min(8000, info.duration_ms), 50, tmp, mix=True)
+            discord_case(info, 0, min(8000, info.duration_ms), limits[1],
+                         tmp, mix=True)
 
         # a short clip at the big tier must not exceed the source bitrate
         short = min(3000, info.duration_ms)
-        size = discord_case(info, 0, short, 500, tmp)
+        size = discord_case(info, 0, short, limits[-1], tmp)
         src_rate = info.total_kbps * short / 8
         check(size <= src_rate * 1000 * 1.15,
               "short clip not inflated past source bitrate")
