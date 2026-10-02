@@ -566,12 +566,20 @@ class Trimmer(QMainWindow):
         host = self.centralWidget()
         if host is None or not hasattr(self, "bottom_panel"):
             return
+        # activate layouts first: stale size hints made the top panel
+        # narrower than its contents, so widgets overlapped
+        for pan in (self.top_panel, self.bottom_panel):
+            lay = pan.layout()
+            if lay is not None:
+                lay.activate()
         hw, hh = host.width(), host.height()
         m = 16
         bw = min(1240, hw - 2 * m)
         bh = self.bottom_panel.sizeHint().height()
         self._place_panel(self.bottom_panel, (hw - bw) // 2, hh - bh - m, bw, bh)
-        tw = min(max(self.top_panel.sizeHint().width(), 520), hw - 2 * m)
+        tw = min(max(self.top_panel.sizeHint().width(),
+                     self.top_panel.minimumSizeHint().width(), 520),
+                 hw - 2 * m)
         th = self.top_panel.sizeHint().height()
         self._place_panel(self.top_panel, (hw - tw) // 2, m, tw, th)
         self.bottom_panel.raise_()
