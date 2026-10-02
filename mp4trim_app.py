@@ -444,7 +444,8 @@ class Trimmer(QMainWindow):
             w.setAttribute(Qt.WA_Hover, True)
 
         # single/double click on the video toggles playback
-        for w in (self.stack, self.video, self.frame_label):
+        for w in (self.stack, self.video, self.video.viewport(),
+                  self.frame_label):
             w.installEventFilter(self)
         host.installEventFilter(self)   # relayout panels when host resizes
 
@@ -654,7 +655,8 @@ class Trimmer(QMainWindow):
                 if h is not None and not self.isFullScreen():
                     h.startSystemMove()
                 return True
-        elif obj in (self.stack, self.video, self.frame_label):
+        elif obj in (self.stack, self.video, self.video.viewport(),
+                     self.frame_label):
             # single AND double click both play/pause; the second click of a
             # double arrives as DblClick, which we swallow so the pair counts
             # as one toggle, not two.
