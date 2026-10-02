@@ -14,6 +14,11 @@ from pathlib import Path
 from cx_Freeze import Executable, setup
 
 HERE = Path(__file__).parent
+# single source of truth: read APP_VERSION from mp4trim.py so the MSI can
+# never be built with a stale version number again
+import re
+APP_VERSION = re.search(r'APP_VERSION = "([^"]+)"',
+                        (HERE / "mp4trim.py").read_text(encoding="utf-8")).group(1)
 FFMPEG = HERE / "ffmpeg"
 ff_files = sorted(p for p in FFMPEG.glob("*")
                   if p.suffix.lower() in (".exe", ".dll")
@@ -53,7 +58,7 @@ bdist_msi_options = {
 
 setup(
     name="mp4trim",
-    version="2.3.0",
+    version=APP_VERSION,
     description="MP4 trimmer - lossless trim and Discord-sized exports",
     options={"build_exe": build_exe_options, "bdist_msi": bdist_msi_options},
     executables=[
