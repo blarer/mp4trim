@@ -226,6 +226,7 @@ class GlassPanel(QWidget):
             self._base_pos = self.pos() - QPoint(0, self.SLIDE_PX)
 
     def fade_in(self, ms: int = 160):
+        # fade only: animating 'pos' moved buttons out from under clicks
         self._capture_base()
         was_shown = self._shown
         self._shown = True
@@ -235,10 +236,8 @@ class GlassPanel(QWidget):
         self._fade.setEndValue(1.0)
         self._fade.start()
         self._slide.stop()
-        self._slide.setDuration(ms)
-        self._slide.setStartValue(self.pos())
-        self._slide.setEndValue(self._base_pos)
-        self._slide.start()
+        if self._base_pos is not None:
+            self.move(self._base_pos)
         if not was_shown:
             self.visibility_changed.emit(True)
 
@@ -253,10 +252,6 @@ class GlassPanel(QWidget):
         self._fade.setEndValue(0.0)
         self._fade.start()
         self._slide.stop()
-        self._slide.setDuration(ms)
-        self._slide.setStartValue(self.pos())
-        self._slide.setEndValue(self._base_pos + QPoint(0, self.SLIDE_PX))
-        self._slide.start()
 
     def _on_fade_done(self):
         if not self._shown and self._opacity.opacity() <= 0.01:
