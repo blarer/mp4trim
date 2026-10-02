@@ -102,6 +102,12 @@ QSlider#vol::handle:horizontal {
 }
 QSlider#vol::handle:horizontal:hover { background: #ffffff; }
 QFrame#vsep { background: rgba(255,255,255,30); border: none; }
+
+QPushButton#winbtn, QPushButton#winclose { background: transparent; border: none; min-width: 30px; padding: 4px 6px; font-size: 14px; }
+QPushButton#winbtn:hover { background: rgba(255,255,255,0.12); border-radius: 8px; }
+QPushButton#winclose:hover { background: #c42b1c; border-radius: 8px; }
+QMenuBar { background: transparent; }
+QStatusBar { background: transparent; }
 """
 
 SHORTCUTS_HELP = """<table cellspacing=6>
@@ -267,8 +273,9 @@ class AutoHider(QObject):
     cursor on *cursor_target* while idle.
     """
 
-    _ACTIVITY = (QEvent.MouseMove, QEvent.MouseButtonPress,
-                 QEvent.MouseButtonDblClick, QEvent.Wheel, QEvent.KeyPress)
+    _ACTIVITY = (QEvent.MouseMove, QEvent.HoverMove, QEvent.HoverEnter,
+                 QEvent.MouseButtonPress, QEvent.MouseButtonDblClick,
+                 QEvent.Wheel, QEvent.KeyPress)
 
     def __init__(self, window: QWidget, panels: list, idle_ms: int = 2000,
                  cursor_target: QWidget | None = None):
@@ -297,10 +304,15 @@ class AutoHider(QObject):
             self._timer.start(self.idle_ms)
 
     def poke(self):
-        """Force-show the panels and restart the idle countdown."""
+        """Force-show the panels and restart the idle countdown.
+
+        Called for every input event, so it must be cheap: fade_in only
+        when a panel is actually hidden (restarting the animation on each
+        mouse move repaints both panels continuously)."""
         self._restore_cursor()
         for p in self.panels:
-            p.fade_in()
+            if not getattr(p, "shown", True):
+                p.fade_in()
         if self._enabled:
             self._timer.start(self.idle_ms)
 

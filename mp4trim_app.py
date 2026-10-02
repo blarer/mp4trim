@@ -14,6 +14,7 @@ from PySide6.QtGui import QAction, QFont, QIcon, QImage, QKeySequence, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
+                               QMenuBar, QStatusBar,
                                QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QMessageBox, QProgressBar, QPushButton,
                                QSlider, QStackedWidget, QVBoxLayout, QWidget)
@@ -87,6 +88,74 @@ except ImportError:
                 p.fade_in()
 
 
+class _EdgeResizer(QObject):
+    """Frameless windows lose their resize border; give it back: within
+    BORDER px of an edge show the resize cursor and hand the drag to the
+    OS (startSystemResize keeps Aero snap etc.)."""
+    BORDER = 6
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self._cursor_set = False
+
+    def _edges(self, gp):
+        w = self.win
+        if w.isMaximized() or w.isFullScreen():
+            return Qt.Edges()
+        g = w.frameGeometry()
+        b = self.BORDER
+        x, y = gp.x(), gp.y()
+        if not (g.left() - 1 <= x <= g.right() + 1
+                and g.top() - 1 <= y <= g.bottom() + 1):
+            return Qt.Edges()
+        e = Qt.Edges()
+        if x <= g.left() + b:
+            e |= Qt.LeftEdge
+        elif x >= g.right() - b:
+            e |= Qt.RightEdge
+        if y <= g.top() + b:
+            e |= Qt.TopEdge
+        elif y >= g.bottom() - b:
+            e |= Qt.BottomEdge
+        return e
+
+    @staticmethod
+    def _cursor(e):
+        if e in (Qt.LeftEdge | Qt.TopEdge, Qt.RightEdge | Qt.BottomEdge):
+            return Qt.SizeFDiagCursor
+        if e in (Qt.RightEdge | Qt.TopEdge, Qt.LeftEdge | Qt.BottomEdge):
+            return Qt.SizeBDiagCursor
+        if e & (Qt.LeftEdge | Qt.RightEdge):
+            return Qt.SizeHorCursor
+        return Qt.SizeVerCursor
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t not in (QEvent.MouseMove, QEvent.MouseButtonPress):
+            return False
+        if not isinstance(obj, QWidget) or obj.window() is not self.win:
+            return False
+        e = self._edges(ev.globalPosition().toPoint())
+        if t == QEvent.MouseMove:
+            if e and not ev.buttons():
+                if not self._cursor_set:
+                    QApplication.setOverrideCursor(self._cursor(e))
+                    self._cursor_set = True
+                else:
+                    QApplication.changeOverrideCursor(self._cursor(e))
+            elif self._cursor_set:
+                QApplication.restoreOverrideCursor()
+                self._cursor_set = False
+            return False
+        if e and ev.button() == Qt.LeftButton:
+            h = self.win.windowHandle()
+            if h is not None:
+                h.startSystemResize(e)
+                return True
+        return False
+
+
 class _TierCombo(QComboBox):
     """QComboBox that reports when its popup is open (used to pin panels)."""
     popup_open = Signal(bool)
@@ -106,7 +175,15 @@ class Trimmer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("mp4trim")
-        self.setMinimumSize(980, 620)
+        # no native title bar: window controls live in the top glass panel
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(640, 360)
+        # menu + status bar are overlay widgets inside the glass panels so
+        # the video owns the whole client area (no bars, no letterbox)
+        self._menu_bar = QMenuBar()
+        self._menu_bar.setNativeMenuBar(False)
+        self._status_bar = QStatusBar()
+        self._status_bar.setSizeGripEnabled(False)
         self.settings = QSettings("mp4trim", "mp4trim")
         geo = self.settings.value("geometry")
         if geo is None or not self.restoreGeometry(geo):
@@ -145,7 +222,6 @@ class Trimmer(QMainWindow):
         self.stack.addWidget(self.video)        # 0 = live playback
         self.stack.addWidget(self.frame_label)  # 1 = ffmpeg preview / empty
         self.stack.setCurrentIndex(1)
-        self.stack.setMinimumHeight(360)
 
         self.grabber = FrameGrabber()
         self.grabber.ready.connect(self._show_frame)
@@ -299,6 +375,7 @@ class Trimmer(QMainWindow):
         for w in (self.btn_snap, self.btn_gif, self.btn_discord, self.btn_trim):
             row2.addWidget(w)
         bl.addLayout(row2)
+        bl.addWidget(self._status_bar)
 
         # top panel: open / folder nav / clip name / update
         self.top_panel = GlassPanel(host)
@@ -306,6 +383,8 @@ class Trimmer(QMainWindow):
         self.lbl_clip.setObjectName("muted")
         top_row = QHBoxLayout()
         top_row.setSpacing(6)
+        top_row.addWidget(self._menu_bar)
+        top_row.addSpacing(6)
         top_row.addWidget(self.btn_open)
         top_row.addSpacing(8)
         top_row.addWidget(self.btn_prev_vid)
@@ -322,6 +401,14 @@ class Trimmer(QMainWindow):
             top_row.setContentsMargins(14, 8, 14, 8)
             self.top_panel.setLayout(top_row)
         self._top_row = top_row
+
+        # real-mouse support: without tracking, Qt emits no MouseMove
+        # while no button is held, so the AutoHider would never see
+        # activity; hover events need WA_Hover.
+        for w in (self, host, self.stack, self.video, self.frame_label,
+                  self.timeline):
+            w.setMouseTracking(True)
+            w.setAttribute(Qt.WA_Hover, True)
 
         # single/double click on the video toggles playback
         for w in (self.stack, self.video, self.frame_label):
@@ -345,6 +432,7 @@ class Trimmer(QMainWindow):
         sb.addPermanentWidget(self.btn_cancel)
 
         self._build_menu()
+        self._menu_bar.setMinimumWidth(self._menu_bar.sizeHint().width())
         saved = float(self.settings.value("discord_limit", 20.0))
         saved = {10.0: 20.0, 500.0: 1000.0}.get(saved, saved)  # Aug 2026 bump
         self.set_discord_limit(saved if saved in [m for _, m in DISCORD_TIERS]
@@ -363,6 +451,19 @@ class Trimmer(QMainWindow):
                               "mp4trim", self.apply_update, "accent")
         self.btn_update.hide()
         self._top_row.addWidget(self.btn_update)
+        self._top_row.addSpacing(8)
+        self.btn_min = btn("–", "Minimize", self.showMinimized, "winbtn")
+        self.btn_max = btn("□", "Maximize / restore (double-click the bar)",
+                           self.toggle_maximize, "winbtn")
+        self.btn_close = btn("✕", "Close", self.close, "winclose")
+        for b_ in (self.btn_min, self.btn_max, self.btn_close):
+            self._top_row.addWidget(b_)
+        # drag the top panel to move; edges resize
+        self.top_panel.installEventFilter(self)
+        self._menu_bar.installEventFilter(self)
+        self.lbl_clip.installEventFilter(self)
+        self._edges = _EdgeResizer(self)
+        QApplication.instance().installEventFilter(self._edges)
         QTimer.singleShot(3000, lambda: self.check_updates(manual=False))
         self._update_timer = QTimer(self)
         self._update_timer.setInterval(24 * 60 * 60 * 1000)
@@ -414,8 +515,8 @@ class Trimmer(QMainWindow):
         """Menu + status bar follow the bottom panel's visibility."""
         pinned_sb = (self.job is not None or self._update_msi is not None
                      or self._menu_open)
-        self.menuBar().setVisible(visible or self._menu_open)
-        self.statusBar().setVisible(visible or pinned_sb)
+        self._menu_bar.setVisible(True)
+        self._status_bar.setVisible(True)
 
     def _place_panel(self, panel, x: int, y: int, w: int, h: int):
         # The real GlassPanel slides via a QPropertyAnimation on 'pos' whose
@@ -437,7 +538,7 @@ class Trimmer(QMainWindow):
         bw = min(1240, hw - 2 * m)
         bh = self.bottom_panel.sizeHint().height()
         self._place_panel(self.bottom_panel, (hw - bw) // 2, hh - bh - m, bw, bh)
-        tw = min(max(self.top_panel.sizeHint().width(), 420), hw - 2 * m)
+        tw = min(max(self.top_panel.sizeHint().width(), 520), hw - 2 * m)
         th = self.top_panel.sizeHint().height()
         self._place_panel(self.top_panel, (hw - tw) // 2, m, tw, th)
         self.bottom_panel.raise_()
@@ -465,6 +566,31 @@ class Trimmer(QMainWindow):
         else:
             self.showFullScreen()
 
+    def toggle_maximize(self):
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def fit_to_video(self):
+        """Resize the window to the clip's aspect ratio (no black bars),
+        as big as fits in 90% of the screen, centred on its current spot."""
+        if not self.info or self.isFullScreen() or self.isMaximized():
+            return
+        vw, vh = self.info.width, self.info.height
+        if not vw or not vh:
+            return
+        scr = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        s = min(scr.width() * 0.9 / vw, scr.height() * 0.9 / vh, 1.0)
+        w, h = round(vw * s), round(vh * s)
+        if w < 640 or h < 360:   # tiny/odd clips: grow to the minimum
+            s = max(640 / vw, 360 / vh)
+            w, h = round(vw * s), round(vh * s)
+        c = self.geometry().center()
+        x = min(max(c.x() - w // 2, scr.left()), scr.right() - w)
+        y = min(max(c.y() - h // 2, scr.top()), scr.bottom() - h)
+        self.setGeometry(x, y, w, h)
+
     def _esc_pressed(self):
         if self.isFullScreen():
             self.showNormal()
@@ -473,6 +599,20 @@ class Trimmer(QMainWindow):
         host = self.centralWidget()
         if obj is host and ev.type() == QEvent.Resize:
             self._relayout_panels()
+        elif obj in (self.top_panel, self.lbl_clip) or (
+                obj is self._menu_bar and ev.type() in (
+                    QEvent.MouseButtonPress, QEvent.MouseButtonDblClick)
+                and self._menu_bar.actionAt(ev.position().toPoint()) is None):
+            if ev.type() == QEvent.MouseButtonDblClick \
+                    and ev.button() == Qt.LeftButton:
+                self.toggle_maximize()
+                return True
+            if ev.type() == QEvent.MouseButtonPress \
+                    and ev.button() == Qt.LeftButton:
+                h = self.windowHandle()
+                if h is not None and not self.isFullScreen():
+                    h.startSystemMove()
+                return True
         elif obj in (self.stack, self.video, self.frame_label):
             # single AND double click both play/pause; the second click of a
             # double arrives as DblClick, which we swallow so the pair counts
@@ -523,6 +663,12 @@ class Trimmer(QMainWindow):
         self.close()
 
     # ---------------------------------------------------------------- menu
+
+    def menuBar(self):
+        return self._menu_bar
+
+    def statusBar(self):
+        return self._status_bar
 
     def _act(self, text, slot, shortcut=None, checkable=False):
         a = QAction(text, self, checkable=checkable)
@@ -605,6 +751,8 @@ class Trimmer(QMainWindow):
         m_help.addAction(self._act("&Keyboard shortcuts", self.show_shortcuts, "F1"))
         m_help.addAction(self._act("Check for &updates", self.check_updates))
         m_help.addAction(self._act("&About", self.show_about))
+
+
 
     def _rebuild_recent(self):
         self.m_recent.clear()
@@ -718,6 +866,7 @@ class Trimmer(QMainWindow):
         cpos = f"  ·  clip {idx + 1} of {len(vids)}" if idx >= 0 else ""
         self.lbl_clip.setText(f"{Path(path).name}{cpos}")
         self.hider.set_enabled(True)
+        self.fit_to_video()
         self._relayout_panels()
         self._start_analyzer()
 
@@ -1173,6 +1322,10 @@ class Trimmer(QMainWindow):
     # ------------------------------------------------------------ closing
 
     def closeEvent(self, e):
+        # invalidate in-flight async probes/snapshots; their slots
+        # would otherwise touch widgets that Qt is tearing down
+        self._load_gen += 1
+
         if self.job:
             if QMessageBox.question(
                     self, "mp4trim", "An export is running. Cancel it and quit?"
