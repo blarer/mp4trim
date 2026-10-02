@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPointF,
                             QPropertyAnimation, QRect, QRectF, Qt, QTimer,
                             Signal)
-from PySide6.QtGui import (QColor, QFont, QImage, QLinearGradient, QPainter,
+from PySide6.QtGui import (QCursor, QColor, QFont, QImage, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPolygonF)
 from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame,
                                QGraphicsDropShadowEffect,
@@ -292,6 +292,14 @@ class AutoHider(QObject):
         self._timer.timeout.connect(self._on_idle)
         QApplication.instance().installEventFilter(self)
         self._timer.start(self.idle_ms)
+        # QVideoWidget renders into a native child window whose mouse
+        # events never reach Qt widget filters, so also poll the real
+        # cursor: any movement inside the window counts as activity.
+        self._last_cursor = QCursor.pos()
+        self._poll = QTimer(self)
+        self._poll.setInterval(100)
+        self._poll.timeout.connect(self._poll_cursor)
+        self._poll.start()
 
     def set_enabled(self, enabled: bool):
         """Disabled = panels always shown (e.g. no video loaded)."""
@@ -311,7 +319,9 @@ class AutoHider(QObject):
         mouse move repaints both panels continuously)."""
         self._restore_cursor()
         for p in self.panels:
-            if not getattr(p, "shown", True):
+            shown = getattr(p, "shown", True)
+            op = p.opacity() if hasattr(p, "opacity") else 1.0
+            if not shown or op < 0.99:
                 p.fade_in()
         if self._enabled:
             self._timer.start(self.idle_ms)
@@ -322,6 +332,16 @@ class AutoHider(QObject):
                 and obj.window() is self._window):
             self.poke()
         return False
+
+    def _poll_cursor(self):
+        pos = QCursor.pos()
+        if pos == self._last_cursor:
+            return
+        self._last_cursor = pos
+        w = self._window
+        if (self._enabled and w.isVisible()
+                and w.frameGeometry().contains(pos)):
+            self.poke()
 
     def _on_idle(self):
         if not self._enabled:

@@ -458,6 +458,11 @@ class Trimmer(QMainWindow):
         self.btn_close = btn("✕", "Close", self.close, "winclose")
         for b_ in (self.btn_min, self.btn_max, self.btn_close):
             self._top_row.addWidget(b_)
+        # the video widget is a native child window; panels must be
+        # native as well or Windows composites them underneath it
+        for pan in (self.top_panel, self.bottom_panel):
+            pan.setAttribute(Qt.WA_NativeWindow, True)
+            pan.winId()
         # drag the top panel to move; edges resize
         self.top_panel.installEventFilter(self)
         self._menu_bar.installEventFilter(self)
