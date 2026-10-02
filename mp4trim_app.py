@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
                                QMenuBar, QStatusBar,
                                QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QMessageBox, QProgressBar, QPushButton,
-                               QSlider, QStackedWidget, QVBoxLayout, QWidget)
+                               QSizePolicy, QSlider, QStackedWidget,
+                               QVBoxLayout, QWidget)
 
 import mp4trim_updater as upd
 from mp4trim_core import *  # noqa: F401,F403
@@ -197,6 +198,24 @@ class _TierCombo(QComboBox):
     def hidePopup(self):
         super().hidePopup()
         self.popup_open.emit(False)
+
+
+class _FlexWidget(QWidget):
+    """Container whose sizeHint().width() is always 0.
+
+    Placed in an HBoxLayout with stretch > 0 so it expands to fill
+    remaining space without inflating the parent layout's sizeHint.
+    """
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        sh.setWidth(0)
+        return sh
+
+    def minimumSizeHint(self):
+        sh = super().minimumSizeHint()
+        sh.setWidth(0)
+        return sh
 
 
 # ------------------------------------------------------------- main window
@@ -392,12 +411,15 @@ class Trimmer(QMainWindow):
         row.addSpacing(10)
         row.addWidget(self.lbl_time)
         row.addWidget(self.lbl_dur)
-        row.addStretch()
-        info_col = QVBoxLayout()
+        # wrap range/est labels in a _FlexWidget so their preferred width
+        # doesn't inflate the bottom panel's sizeHint (they clip naturally)
+        self._info_flex = _FlexWidget()
+        info_col = QVBoxLayout(self._info_flex)
+        info_col.setContentsMargins(0, 0, 0, 0)
         info_col.setSpacing(2)
         info_col.addWidget(self.lbl_range)
         info_col.addWidget(self.lbl_est)
-        row.addLayout(info_col)
+        row.addWidget(self._info_flex, 1)   # stretch = 1
         bl.addLayout(row)
         # row 2: exports, right-aligned ····· tier · snap · gif · discord · trim
         row2 = QHBoxLayout()
@@ -414,6 +436,9 @@ class Trimmer(QMainWindow):
         self.top_panel = GlassPanel(host)
         self.lbl_clip = QLabel("")
         self.lbl_clip.setObjectName("muted")
+        self.lbl_clip.setMinimumWidth(0)
+        self.lbl_clip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._lbl_clip_full = ""   # unelided text; elided version set via _elide_clip()
         top_row = QHBoxLayout()
         top_row.setSpacing(6)
         top_row.addWidget(self._menu_bar)
@@ -563,24 +588,140 @@ class Trimmer(QMainWindow):
         if getattr(panel, "_base_pos", None) is not None:
             panel._base_pos = panel.pos()
 
+    def _elide_clip(self, avail_px: int):
+        """Set lbl_clip text, elided to avail_px with Qt.ElideMiddle."""
+        if not self._lbl_clip_full:
+            self.lbl_clip.setText("")
+            return
+        fm = self.lbl_clip.fontMetrics()
+        elided = fm.elidedText(self._lbl_clip_full, Qt.ElideMiddle,
+                               max(avail_px, 20))
+        self.lbl_clip.setText(elided)
+
+    def _apply_tier(self, host_width: int):
+        """Switch between full / compact / minimal layout tiers based on host_width.
+
+        Tiers
+        -----
+        full    >= 1100 px  all labels visible, vol_slider 110 px
+        compact  820-1099   shorten mark buttons, hide lbl_dur,
+                            narrow vol_slider to 70 px
+        minimal  < 820      hide vol_slider (keep btn_mute), hide lbl_range,
+                            shorten export buttons to emoji only
+        """
+        if host_width >= 1100:
+            tier = "full"
+        elif host_width >= 820:
+            tier = "compact"
+        else:
+            tier = "minimal"
+
+        if getattr(self, "_current_tier", None) == tier:
+            return  # nothing to do
+
+        self._current_tier = tier
+
+        # Reset max-width constraints (previous tiers may have set them)
+        self.lbl_range.setMaximumWidth(16777215)
+        self.lbl_est.setMaximumWidth(16777215)
+
+        if tier == "full":
+            self.btn_set_in.setText("[ In")
+            self.btn_set_out.setText("Out ]")
+            self.lbl_dur.show()
+            self.vol.setFixedWidth(110)
+            self.vol.show()
+            self.btn_mute.show()
+            self.lbl_range.show()
+            self.lbl_est.show()
+            # max widths will be set by _relayout_panels based on bw
+            self.btn_snap.setText("📷 Snap")
+            self.btn_gif.setText("🎞 GIF")
+            self.btn_discord.setText("💬 Discord")
+            self.btn_trim.setText("✂ Trim")
+            self.btn_open.setText("📂 Open")
+
+        elif tier == "compact":
+            self.btn_set_in.setText("[")
+            self.btn_set_out.setText("]")
+            self.lbl_dur.hide()
+            self.vol.setFixedWidth(70)
+            self.vol.show()
+            self.btn_mute.show()
+            self.lbl_range.show()
+            self.lbl_est.show()
+            # max widths will be set by _relayout_panels based on bw
+            self.btn_snap.setText("📷 Snap")
+            self.btn_gif.setText("🎞 GIF")
+            self.btn_discord.setText("💬 Discord")
+            self.btn_trim.setText("✂ Trim")
+            self.btn_open.setText("📂 Open")
+
+        else:  # minimal
+            self.btn_set_in.setText("[")
+            self.btn_set_out.setText("]")
+            self.lbl_dur.hide()
+            self.vol.hide()
+            self.btn_mute.show()
+            self.lbl_range.hide()
+            self.lbl_est.show()
+            self.btn_snap.setText("📷")
+            self.btn_gif.setText("🎞")
+            self.btn_discord.setText("💬")
+            self.btn_trim.setText("✂")
+            self.btn_open.setText("📂")
+
     def _relayout_panels(self):
         host = self.centralWidget()
         if host is None or not hasattr(self, "bottom_panel"):
             return
-        # activate layouts first: stale size hints made the top panel
-        # narrower than its contents, so widgets overlapped
+        hw, hh = host.width(), host.height()
+        m = 16
+        bw = min(1240, hw - 2 * m)
+
+        # apply responsive tier FIRST (changes widget visibility / sizes)
+        self._apply_tier(hw)
+
+        # _FlexWidget (info_flex) reports sizeHint().width() == 0, so
+        # lbl_range / lbl_est never inflate the bottom panel's sizeHint.
+        # No manual max-width caps needed; the layout stretch gives them
+        # exactly the leftover space.
+
+        # activate layouts so sizeHints reflect the new tier
         for pan in (self.top_panel, self.bottom_panel):
             lay = pan.layout()
             if lay is not None:
                 lay.activate()
-        hw, hh = host.width(), host.height()
-        m = 16
-        bw = min(1240, hw - 2 * m)
+
         bh = self.bottom_panel.sizeHint().height()
         self._place_panel(self.bottom_panel, (hw - bw) // 2, hh - bh - m, bw, bh)
+
+        # top panel: lbl_clip gets whatever space is left after fixed widgets
+        # estimate fixed widget widths to compute clip label budget
+        _menu_w = self._menu_bar.sizeHint().width()
+        _open_w = self.btn_open.sizeHint().width()
+        _nav_w = (self.btn_prev_vid.sizeHint().width()
+                  + self.btn_next_vid.sizeHint().width())
+        _wctl_w = (self.btn_min.sizeHint().width()
+                   + self.btn_max.sizeHint().width()
+                   + self.btn_close.sizeHint().width())
+        _upd_w = (self.btn_update.sizeHint().width()
+                  if self.btn_update.isVisible() else 0)
+        # spacings: 6+6+8+10+8 (from top_row layout, approximate)
+        _spacing = 6 + 6 + 8 + 10 + 8 + 6 * 3 + 14 * 2  # margins + spacings
+        _clip_budget = (hw - 2 * m
+                        - _menu_w - _open_w - _nav_w - _wctl_w
+                        - _upd_w - _spacing - 20)
+        self._elide_clip(max(_clip_budget, 20))
+
+        # re-activate after elision may change sizeHint
+        lay = self.top_panel.layout()
+        if lay is not None:
+            lay.activate()
+
         tw = min(max(self.top_panel.sizeHint().width(),
                      self.top_panel.minimumSizeHint().width(), 520),
-                 hw - 2 * m)
+                 hw - 2 * m)   # top panel capped at host_width - 32
         th = self.top_panel.sizeHint().height()
         self._place_panel(self.top_panel, (hw - tw) // 2, m, tw, th)
         self.bottom_panel.raise_()
@@ -907,7 +1048,8 @@ class Trimmer(QMainWindow):
         self.setWindowTitle(f"mp4trim · {Path(path).name}")
         vids, idx = self._siblings()
         cpos = f"  ·  clip {idx + 1} of {len(vids)}" if idx >= 0 else ""
-        self.lbl_clip.setText(f"{Path(path).name}{cpos}")
+        self._lbl_clip_full = f"{Path(path).name}{cpos}"
+        self.lbl_clip.setText(self._lbl_clip_full)
         self.hider.set_enabled(True)
         self.fit_to_video()
         self._relayout_panels()

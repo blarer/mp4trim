@@ -181,6 +181,8 @@ class ScrubEngine(QThread):
     WIDTH = 768
     CACHE_MB = 420
     MAX_GOP_FRAMES = 600
+    # Derived byte budget; computed once so the hot evict path avoids multiply.
+    CACHE_BYTES = CACHE_MB * 1_048_576
 
     def __init__(self):
         super().__init__()
@@ -200,6 +202,8 @@ class ScrubEngine(QThread):
     def set_source(self, info: MediaInfo | None, kfs: list[int]):
         with self._lock:
             self._info, self._kfs = info, list(kfs)
+            for frames in self._cache.values():
+                del frames[:]   # release QImage refs immediately on source change
             self._cache.clear()
             self._complete.clear()
             self._lru.clear()
@@ -265,11 +269,14 @@ class ScrubEngine(QThread):
         self._lru.append(gi)
 
     def _evict(self, frame_bytes: int):
-        cap = self.CACHE_MB * 1_048_576
         total = sum(len(v) for v in self._cache.values()) * frame_bytes
-        while total > cap and len(self._lru) > 1:
+        while total > self.CACHE_BYTES and len(self._lru) > 1:
             old = self._lru.pop(0)
-            total -= len(self._cache.pop(old, ())) * frame_bytes
+            evicted = self._cache.pop(old, None)
+            if evicted is not None:
+                total -= len(evicted) * frame_bytes
+                del evicted[:]   # release QImage refs immediately
+                del evicted
             self._complete.discard(old)
 
     def _kill_proc(self):

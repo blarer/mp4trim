@@ -298,11 +298,11 @@ def lossless_mb(keep_ms: int, info: MediaInfo) -> float:
 
 
 # Options each encoder is used with. The probe runs these exact options, so an
-# older ffmpeg or GPU driver that rejects one (e.g. -multipass, -tune hq)
+# older ffmpeg or GPU driver that rejects one (e.g. -tune hq)
 # falls back to the CPU encoder instead of failing the export.
 PROBE_OPTS = {
-    "h264_nvenc": ["-preset", "p6", "-tune", "hq", "-rc", "vbr",
-                   "-multipass", "fullres", "-b:v", "2000k", "-maxrate",
+    "h264_nvenc": ["-preset", "p5", "-rc", "vbr",
+                   "-b:v", "2000k", "-maxrate",
                    "2600k", "-bufsize", "4000k", "-spatial-aq", "1",
                    "-rc-lookahead", "32", "-profile:v", "high"],
     "hevc_nvenc": ["-preset", "p6", "-rc", "vbr", "-cq", "18", "-b:v", "0",
@@ -360,9 +360,8 @@ def discord_args(info: MediaInfo, t_in: int, t_out: int, dst: str,
     rate = ["-b:v", f"{v_kbps}k", "-maxrate", f"{int(v_kbps * 1.3)}k",
             "-bufsize", f"{v_kbps * 2}k"]
     if encoder == "h264_nvenc":
-        args += ["-c:v", "h264_nvenc", "-preset", "p6", "-tune", "hq",
-                 "-rc", "vbr", "-multipass", "fullres", *rate,
-                 "-spatial-aq", "1", "-rc-lookahead", "32"]
+        args += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
+                 *rate, "-spatial-aq", "1", "-rc-lookahead", "32"]
     else:
         args += ["-c:v", "libx264", "-preset", "medium", *rate]
     args += ["-profile:v", "high"]
