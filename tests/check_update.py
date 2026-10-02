@@ -119,7 +119,8 @@ while not w.btn_update.isVisible() and time.time() < end:
 check(w.btn_update.isVisible() and "99.0.0" in w.btn_update.text(),
       f"update button shown ({w.btn_update.text()!r})")
 launched = []
-m.launch_update = lambda p: launched.append(p)
+import mp4trim_updater
+mp4trim_updater.launch_update = lambda p: launched.append(p)  # app calls upd.launch_update
 # the job-running path shows a modal box; stub it or the test blocks forever
 infos = []
 m.QMessageBox.information = staticmethod(lambda *a, **k: infos.append(a))

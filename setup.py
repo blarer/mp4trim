@@ -18,7 +18,7 @@ HERE = Path(__file__).parent
 # never be built with a stale version number again
 import re
 APP_VERSION = re.search(r'APP_VERSION = "([^"]+)"',
-                        (HERE / "mp4trim.py").read_text(encoding="utf-8")).group(1)
+                        (HERE / "mp4trim_core.py").read_text(encoding="utf-8")).group(1)
 FFMPEG = HERE / "ffmpeg"
 ff_files = sorted(p for p in FFMPEG.glob("*")
                   if p.suffix.lower() in (".exe", ".dll")
