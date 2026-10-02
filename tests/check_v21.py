@@ -142,11 +142,17 @@ pump(0.5)
 check(Path(w.info.path).name == "a clip.mp4", f"prev twice -> {Path(w.info.path).name}")
 check(w.btn_prev_vid.isEnabled() and w.btn_next_vid.isEnabled(), "nav buttons enabled")
 
-# ---- OLED theme: window paints true black ----
-img = w.grab().toImage()
-c = img.pixelColor(w.width() // 2, w.menuBar().height() + 4)
+# ---- OLED theme: with edge-to-edge video the frame shows real pixels, so
+# sample an UNLOADED window: its background must be true black ----
+w2 = m.Trimmer()
+w2.resize(800, 500)
+w2.show()
+pump(0.4)
+img = w2.grab().toImage()
+c = img.pixelColor(w2.width() // 2, w2.height() // 2)
 check(c.red() == 0 and c.green() == 0 and c.blue() == 0,
-      f"video area is pure black ({c.name()})")
+      f"empty window is pure black ({c.name()})")
+w2.close()
 check("background: #000000" in m.STYLE, "stylesheet uses #000000")
 
 w.close()

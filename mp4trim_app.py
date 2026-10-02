@@ -8,12 +8,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import (Property, QEvent, QObject, QSettings, Qt, QThread,
-                            QTimer, QUrl, Signal)
-from PySide6.QtGui import QAction, QFont, QIcon, QImage, QKeySequence, QPixmap
+from PySide6.QtCore import (Property, QEvent, QObject, QSettings, QSizeF,
+                            Qt, QThread, QTimer, QUrl, Signal)
+from PySide6.QtGui import (QAction, QColor, QFont, QIcon, QImage,
+                           QKeySequence, QPixmap)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
+                               QGraphicsScene, QGraphicsView,
                                QMenuBar, QStatusBar,
                                QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QMessageBox, QProgressBar, QPushButton,
@@ -156,6 +158,34 @@ class _EdgeResizer(QObject):
         return False
 
 
+class _VideoView(QGraphicsView):
+    """Borderless graphics view that keeps the video item filling it.
+
+    QVideoWidget is a native win32 child window that Windows composites
+    over sibling Qt widgets, hiding the glass panels. QGraphicsVideoItem
+    renders through Qt's scene graph instead, so normal stacking works.
+    """
+
+    def __init__(self, scene, item):
+        super().__init__(scene)
+        self._item = item
+        self.setFrameShape(QGraphicsView.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setBackgroundBrush(QColor(0, 0, 0))
+        self.setRenderHints(self.renderHints())
+        item.nativeSizeChanged.connect(lambda *_: self._fit())
+
+    def _fit(self):
+        vp = self.viewport().size()
+        self._item.setSize(QSizeF(vp.width(), vp.height()))
+        self.setSceneRect(0, 0, vp.width(), vp.height())
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
+
+
 class _TierCombo(QComboBox):
     """QComboBox that reports when its popup is open (used to pin panels)."""
     popup_open = Signal(bool)
@@ -207,9 +237,12 @@ class Trimmer(QMainWindow):
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
-        self.video = QVideoWidget()
+        self._scene = QGraphicsScene(self)
+        self._video_item = QGraphicsVideoItem()
+        self._scene.addItem(self._video_item)
+        self.video = _VideoView(self._scene, self._video_item)
         self.video.setFocusPolicy(Qt.NoFocus)
-        self.player.setVideoOutput(self.video)
+        self.player.setVideoOutput(self._video_item)
         self.player.positionChanged.connect(self.on_player_pos)
         self.player.playbackStateChanged.connect(self.on_play_state)
         self.player.errorOccurred.connect(self.on_player_error)
@@ -458,11 +491,6 @@ class Trimmer(QMainWindow):
         self.btn_close = btn("✕", "Close", self.close, "winclose")
         for b_ in (self.btn_min, self.btn_max, self.btn_close):
             self._top_row.addWidget(b_)
-        # the video widget is a native child window; panels must be
-        # native as well or Windows composites them underneath it
-        for pan in (self.top_panel, self.bottom_panel):
-            pan.setAttribute(Qt.WA_NativeWindow, True)
-            pan.winId()
         # drag the top panel to move; edges resize
         self.top_panel.installEventFilter(self)
         self._menu_bar.installEventFilter(self)
