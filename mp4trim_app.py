@@ -778,6 +778,27 @@ class Trimmer(QMainWindow):
         if self.isFullScreen():
             self.showNormal()
 
+    def keyPressEvent(self, e):
+        # Menu bar hides with the chrome, and Qt disables shortcuts of
+        # actions in hidden menus; match keys against menu shortcuts
+        # manually so D/G/S/I/O etc. keep working while the UI is
+        # faded out. Unconditional: if this handler receives the key at
+        # all, Qt's native shortcut resolution already declined it.
+        if True:
+            seq = QKeySequence(int(e.modifiers().value) | e.key())
+            for top in self._menu_bar.actions():
+                menu = top.menu()
+                if menu is None:
+                    continue
+                for act in menu.actions():
+                    if act.isEnabled() and any(
+                            s.matches(seq) == QKeySequence.ExactMatch
+                            for s in act.shortcuts()):
+                        act.trigger()
+                        e.accept()
+                        return
+        super().keyPressEvent(e)
+
     def eventFilter(self, obj, ev):
         host = self.centralWidget()
         if obj is host and ev.type() == QEvent.Resize:

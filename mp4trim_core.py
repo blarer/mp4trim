@@ -18,7 +18,7 @@ from PySide6.QtCore import QMimeData, QUrl
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.1.1"
 UPDATE_REPO = "blarer/mp4trim"   # GitHub repo the auto-updater watches
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
 DISCORD_TIERS = [("Free · 20 MB", 20), ("Nitro Basic · 50 MB", 50),
