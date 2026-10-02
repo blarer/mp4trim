@@ -560,7 +560,7 @@ class Trimmer(QMainWindow):
         if slide is not None:
             slide.stop()
         panel.setGeometry(x, y, w, h)
-        if hasattr(panel, "_base_pos"):
+        if getattr(panel, "_base_pos", None) is not None:
             panel._base_pos = panel.pos()
 
     def _relayout_panels(self):

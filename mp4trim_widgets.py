@@ -176,19 +176,9 @@ class GlassPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self._surface)
         self.set_content_layout(layout or QHBoxLayout())
-        # one effect per widget: shadow on the panel, opacity on the surface
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setColor(QColor(0, 0, 0))
-        shadow.setBlurRadius(32)
-        shadow.setOffset(0, 6)
-        self.setGraphicsEffect(shadow)
-        self._opacity = QGraphicsOpacityEffect(self._surface)
-        self._opacity.setOpacity(1.0)
-        self._surface.setGraphicsEffect(self._opacity)
-        self._fade = QPropertyAnimation(self._opacity, b"opacity", self)
-        self._slide = QPropertyAnimation(self, b"pos", self)
-        self._slide.setEasingCurve(QEasingCurve.OutCubic)
-        self._fade.finished.connect(self._on_fade_done)
+        # No QGraphicsEffect: at 2x DPI (e.g. RDP 200%) effect rasterization
+        # paints the panel offset from its real geometry, so clicks miss.
+        # Show/hide is instant; the glass look lives in _GlassSurface.
 
     # --- content ---
     def set_content_layout(self, layout):
@@ -217,45 +207,21 @@ class GlassPanel(QWidget):
         return self._shown
 
     def opacity(self) -> float:
-        return self._opacity.opacity()
-
-    def _capture_base(self):
-        if self._shown and self._slide.state() != QPropertyAnimation.Running:
-            self._base_pos = self.pos()
-        elif self._base_pos is None:
-            self._base_pos = self.pos() - QPoint(0, self.SLIDE_PX)
+        return 1.0 if self._shown else 0.0
 
     def fade_in(self, ms: int = 160):
-        # fade only: animating 'pos' moved buttons out from under clicks
-        self._capture_base()
         was_shown = self._shown
         self._shown = True
-        self._fade.stop()
-        self._fade.setDuration(ms)
-        self._fade.setStartValue(self._opacity.opacity())
-        self._fade.setEndValue(1.0)
-        self._fade.start()
-        self._slide.stop()
-        if self._base_pos is not None:
-            self.move(self._base_pos)
+        self.show()
         if not was_shown:
             self.visibility_changed.emit(True)
 
     def fade_out(self, ms: int = 260):
         if self._pinned or not self._shown:
             return
-        self._capture_base()
         self._shown = False
-        self._fade.stop()
-        self._fade.setDuration(ms)
-        self._fade.setStartValue(self._opacity.opacity())
-        self._fade.setEndValue(0.0)
-        self._fade.start()
-        self._slide.stop()
-
-    def _on_fade_done(self):
-        if not self._shown and self._opacity.opacity() <= 0.01:
-            self.visibility_changed.emit(False)
+        self.hide()
+        self.visibility_changed.emit(False)
 
 
 class AutoHider(QObject):
