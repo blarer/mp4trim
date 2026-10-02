@@ -1,14 +1,18 @@
-"""Visual widgets: stylesheet, Timeline, snapshot view/dialog."""
+"""Visual widgets: stylesheet, Timeline, snapshot view/dialog, glass UI."""
 
 import bisect
+import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPointF,
+                            QPropertyAnimation, QRect, QRectF, Qt, QTimer,
+                            Signal)
 from PySide6.QtGui import (QColor, QFont, QImage, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPolygonF)
-from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog,
-                               QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame,
+                               QGraphicsDropShadowEffect,
+                               QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+                               QPushButton, QVBoxLayout, QWidget)
 
 import mp4trim_core as core
 
@@ -77,6 +81,27 @@ QLabel#muted { color: #8a8a92; }
 QLabel#drop { color: #6a6a74; font-size: 13pt; background: #000000; }
 QStatusBar { background: #000000; color: #8a8a92; border-top: 1px solid #131318; }
 QStatusBar::item { border: none; }
+QPushButton#glass {
+    min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px;
+    padding: 0; border-radius: 10px; font-size: 12pt;
+    background: transparent; border: 1px solid transparent; color: #e8e8ea;
+}
+QPushButton#glass:hover { background: rgba(255,255,255,26); border-color: rgba(255,255,255,30); }
+QPushButton#glass:pressed { background: rgba(255,255,255,14); }
+QPushButton#glass:checked { background: rgba(88,101,242,80); border-color: rgba(88,101,242,140); }
+QPushButton#glass:disabled { color: #55555c; background: transparent; }
+QSlider#vol { min-height: 20px; }
+QSlider#vol::groove:horizontal {
+    height: 4px; border-radius: 2px; background: rgba(255,255,255,40);
+}
+QSlider#vol::sub-page:horizontal { background: #5865f2; border-radius: 2px; }
+QSlider#vol::add-page:horizontal { background: rgba(255,255,255,40); border-radius: 2px; }
+QSlider#vol::handle:horizontal {
+    width: 12px; height: 12px; margin: -4px 0; border-radius: 6px;
+    background: #ffffff; border: none;
+}
+QSlider#vol::handle:horizontal:hover { background: #ffffff; }
+QFrame#vsep { background: rgba(255,255,255,30); border: none; }
 """
 
 SHORTCUTS_HELP = """<table cellspacing=6>
@@ -95,6 +120,231 @@ SHORTCUTS_HELP = """<table cellspacing=6>
 <tr><td><b>S</b></td><td>snapshot / crop current frame</td></tr>
 <tr><td><b>Ctrl+O</b></td><td>open (drag &amp; drop works too)</td></tr>
 </table>"""
+
+
+# ------------------------------------------------------------- liquid glass
+
+class _GlassSurface(QWidget):
+    """Inner surface of a GlassPanel: paints the smoked-glass background.
+
+    Qt allows exactly one QGraphicsEffect per widget, so the drop shadow
+    lives on the GlassPanel while the opacity (fade) effect lives here.
+    """
+
+    RADIUS = 14
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(r, self.RADIUS, self.RADIUS)
+        p.fillPath(path, QColor(8, 8, 12, 205))
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+        p.end()
+
+
+class GlassPanel(QWidget):
+    """Floating smoked-glass container with fade/slide show-hide.
+
+    Children go into ``self.layout()`` (a QHBoxLayout by default, swap it
+    with ``set_content_layout``). ``fade_in``/``fade_out`` animate opacity
+    and ease the panel 10 px vertically. While ``pinned`` is True,
+    ``fade_out`` is ignored (e.g. a popover inside the panel is open).
+    """
+
+    visibility_changed = Signal(bool)
+
+    SLIDE_PX = 10
+
+    def __init__(self, parent=None, layout=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self._pinned = False
+        self._shown = True
+        self._base_pos: QPoint | None = None
+        self._surface = _GlassSurface(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._surface)
+        self.set_content_layout(layout or QHBoxLayout())
+        # one effect per widget: shadow on the panel, opacity on the surface
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setColor(QColor(0, 0, 0))
+        shadow.setBlurRadius(32)
+        shadow.setOffset(0, 6)
+        self.setGraphicsEffect(shadow)
+        self._opacity = QGraphicsOpacityEffect(self._surface)
+        self._opacity.setOpacity(1.0)
+        self._surface.setGraphicsEffect(self._opacity)
+        self._fade = QPropertyAnimation(self._opacity, b"opacity", self)
+        self._slide = QPropertyAnimation(self, b"pos", self)
+        self._slide.setEasingCurve(QEasingCurve.OutCubic)
+        self._fade.finished.connect(self._on_fade_done)
+
+    # --- content ---
+    def set_content_layout(self, layout):
+        """Replace the inner layout children are added to."""
+        old = self._surface.layout()
+        if old is not None:
+            QWidget().setLayout(old)  # detach and discard
+        layout.setContentsMargins(12, 8, 12, 8)
+        self._surface.setLayout(layout)
+
+    def layout(self):  # children go onto the glass surface
+        return self._surface.layout()
+
+    # --- pinning ---
+    @property
+    def pinned(self) -> bool:
+        return self._pinned
+
+    @pinned.setter
+    def pinned(self, value: bool):
+        self._pinned = bool(value)
+
+    # --- fading ---
+    @property
+    def shown(self) -> bool:
+        return self._shown
+
+    def opacity(self) -> float:
+        return self._opacity.opacity()
+
+    def _capture_base(self):
+        if self._shown and self._slide.state() != QPropertyAnimation.Running:
+            self._base_pos = self.pos()
+        elif self._base_pos is None:
+            self._base_pos = self.pos() - QPoint(0, self.SLIDE_PX)
+
+    def fade_in(self, ms: int = 160):
+        self._capture_base()
+        was_shown = self._shown
+        self._shown = True
+        self._fade.stop()
+        self._fade.setDuration(ms)
+        self._fade.setStartValue(self._opacity.opacity())
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+        self._slide.stop()
+        self._slide.setDuration(ms)
+        self._slide.setStartValue(self.pos())
+        self._slide.setEndValue(self._base_pos)
+        self._slide.start()
+        if not was_shown:
+            self.visibility_changed.emit(True)
+
+    def fade_out(self, ms: int = 260):
+        if self._pinned or not self._shown:
+            return
+        self._capture_base()
+        self._shown = False
+        self._fade.stop()
+        self._fade.setDuration(ms)
+        self._fade.setStartValue(self._opacity.opacity())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+        self._slide.stop()
+        self._slide.setDuration(ms)
+        self._slide.setStartValue(self.pos())
+        self._slide.setEndValue(self._base_pos + QPoint(0, self.SLIDE_PX))
+        self._slide.start()
+
+    def _on_fade_done(self):
+        if not self._shown and self._opacity.opacity() <= 0.01:
+            self.visibility_changed.emit(False)
+
+
+class AutoHider(QObject):
+    """Shows GlassPanels on activity inside a window, fades them after idle.
+
+    Filters events application-wide but only reacts to activity whose
+    receiving widget belongs to *window* (child-widget mouse moves never
+    reach the window's own filter). ``set_enabled(False)`` keeps the panels
+    permanently visible. ``hide_cursor_when_idle`` additionally blanks the
+    cursor on *cursor_target* while idle.
+    """
+
+    _ACTIVITY = (QEvent.MouseMove, QEvent.MouseButtonPress,
+                 QEvent.MouseButtonDblClick, QEvent.Wheel, QEvent.KeyPress)
+
+    def __init__(self, window: QWidget, panels: list, idle_ms: int = 2000,
+                 cursor_target: QWidget | None = None):
+        super().__init__(window)
+        self._window = window
+        self.panels = list(panels)
+        self.idle_ms = idle_ms
+        self.hide_cursor_when_idle = False
+        self._cursor_target = cursor_target
+        self._cursor_hidden = False
+        self._enabled = True
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._on_idle)
+        QApplication.instance().installEventFilter(self)
+        self._timer.start(self.idle_ms)
+
+    def set_enabled(self, enabled: bool):
+        """Disabled = panels always shown (e.g. no video loaded)."""
+        self._enabled = bool(enabled)
+        self._timer.stop()
+        self._restore_cursor()
+        for p in self.panels:
+            p.fade_in()
+        if self._enabled:
+            self._timer.start(self.idle_ms)
+
+    def poke(self):
+        """Force-show the panels and restart the idle countdown."""
+        self._restore_cursor()
+        for p in self.panels:
+            p.fade_in()
+        if self._enabled:
+            self._timer.start(self.idle_ms)
+
+    def eventFilter(self, obj, event):
+        if (self._enabled and event.type() in self._ACTIVITY
+                and isinstance(obj, QWidget)
+                and obj.window() is self._window):
+            self.poke()
+        return False
+
+    def _on_idle(self):
+        if not self._enabled:
+            return
+        for p in self.panels:
+            p.fade_out()
+        if self.hide_cursor_when_idle and self._cursor_target is not None:
+            self._cursor_target.setCursor(Qt.BlankCursor)
+            self._cursor_hidden = True
+
+    def _restore_cursor(self):
+        if self._cursor_hidden and self._cursor_target is not None:
+            self._cursor_target.unsetCursor()
+            self._cursor_hidden = False
+
+
+class IconButton(QPushButton):
+    """Compact 34×34 icon-only button for the floating glass bar."""
+
+    def __init__(self, text: str = "", tooltip: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("glass")
+        self.setFixedSize(34, 34)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        if tooltip:
+            self.setToolTip(tooltip)
+
+
+def vseparator() -> QFrame:
+    """Thin 1×20 vertical separator for glass toolbars."""
+    f = QFrame()
+    f.setObjectName("vsep")
+    f.setFixedSize(1, 20)
+    return f
 
 
 # ---------------------------------------------------------------- timeline
@@ -564,5 +814,80 @@ class SnapshotDialog(QDialog):
         img = self.view.image
         self.info.setText(f"{img.width()}×{img.height()} · "
                           "drag to crop, or copy the full frame")
+
+
+# -------------------------------------------------------------------- demo
+
+def _demo():
+    """py -3.12 mp4trim_widgets.py demo -> eyeball the glass building blocks.
+
+    Also self-checks the fade cycle: waits past idle_ms and asserts the
+    opacity effect drops, then pokes and asserts it recovers.
+    """
+    import time
+
+    from PySide6.QtWidgets import QMainWindow, QSlider
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(STYLE)
+
+    win = QMainWindow()
+    win.setWindowTitle("mp4trim glass demo")
+    win.resize(900, 600)
+    video = QWidget()  # stand-in for the video area
+    video.setStyleSheet("background: #000000;")
+    win.setCentralWidget(video)
+
+    panel = GlassPanel(video)
+    for glyph, tip in (("⏮", "Previous"), ("⏯", "Play / pause"),
+                       ("⏭", "Next")):
+        panel.layout().addWidget(IconButton(glyph, tip))
+    panel.layout().addWidget(vseparator())
+    vol = QSlider(Qt.Horizontal)
+    vol.setObjectName("vol")
+    vol.setRange(0, 100)
+    vol.setValue(70)
+    vol.setFixedWidth(120)
+    panel.layout().addWidget(vol)
+    panel.adjustSize()
+
+    def place():
+        panel.move((video.width() - panel.width()) // 2,
+                   video.height() - panel.height() - 24)
+    win.show()
+    place()
+
+    hider = AutoHider(win, [panel], idle_ms=1200, cursor_target=video)
+    hider.hide_cursor_when_idle = True
+    panel.visibility_changed.connect(
+        lambda v: print(f"visibility_changed({v})"))
+
+    def pump(seconds: float):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.01)
+
+    pump(0.3)
+    o0 = panel.opacity()
+    win.grab().save("demo_shown.png")
+    pump(2.0)            # past idle_ms + fade_out
+    o1 = panel.opacity()
+    win.grab().save("demo_hidden.png")
+    hider.poke()
+    pump(0.5)
+    o2 = panel.opacity()
+    win.grab().save("demo_poked.png")
+    print(f"opacity shown={o0:.2f} after-idle={o1:.2f} after-poke={o2:.2f}")
+    ok = o0 > 0.9 and o1 < 0.1 and o2 > 0.9
+    print("fade cycle OK" if ok else "fade cycle FAILED")
+    if "--check" in sys.argv:          # headless validation: don't block
+        sys.exit(0 if ok else 1)
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "demo":
+        _demo()
 
 

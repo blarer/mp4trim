@@ -121,6 +121,8 @@ def pump(sec):
 
 w.load(str(work / "b clip.mp4"))
 pump(0.5)
+if hasattr(w, "auto_hider"):  # keep glass panels visible for the assertions below
+    w.auto_hider.set_enabled(False)
 vids, idx = w._siblings()
 check([v.name for v in vids] == names and idx == 1,
       f"siblings sorted, current idx {idx}")

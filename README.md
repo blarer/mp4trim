@@ -165,6 +165,7 @@ python tests/ui_smoke.py <clip.mp4>           # drives the window: marks, zoom, 
 python tests/quality_compare.py <clip.mp4>    # side-by-side frame + color tags
 python tests/check_misc.py <clip.mp4>         # GIF ladder, frame-accurate, handles, snapshot
 python tests/check_v21.py <clip.mp4>          # fine scrubbing, folder nav, OLED theme
+python tests/check_glass.py <clip.mp4>        # liquid-glass panels: auto-hide, volume, mute, fullscreen
 python tests/check_update.py                  # auto-updater: feed rules, download, UI
 python tests/check_tiers.py <clip.mp4>        # Discord tier limits on a real clip
 python tests/check_scrub.py <clip.mp4>        # scrub engine: latency, exactness, cache, UI

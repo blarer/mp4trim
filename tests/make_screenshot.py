@@ -31,6 +31,8 @@ w.resize(1240, 800)
 w.show()
 w.act_ffpreview.setChecked(True)
 w.load(str(clip))
+if hasattr(w, "auto_hider"):  # keep glass panels visible in the screenshot
+    w.auto_hider.set_enabled(False)
 
 
 def pump(sec):

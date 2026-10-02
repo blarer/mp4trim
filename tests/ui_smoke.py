@@ -68,6 +68,8 @@ def wait_for(pred, sec, what):
 w.load(clip)
 wait_for(lambda: w.info is not None, 15, "async load")
 check(w.info is not None, "clip loaded")
+if hasattr(w, "auto_hider"):  # keep glass panels visible for the assertions below
+    w.auto_hider.set_enabled(False)
 check(wait_for(lambda: len(w.keyframes) > 0, 20, "keyframes"), "keyframes indexed")
 check(wait_for(lambda: len(w.timeline._thumb_ms) >= 35, 60, "thumbs"),
       f"thumbnails ({len(w.timeline._thumb_ms)})")

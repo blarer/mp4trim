@@ -8,14 +8,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThread, QTimer, QUrl
+from PySide6.QtCore import (Property, QEvent, QObject, QSettings, Qt, QThread,
+                            QTimer, QUrl, Signal)
 from PySide6.QtGui import QAction, QFont, QIcon, QImage, QKeySequence, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
-                               QHBoxLayout, QLabel, QMainWindow, QMessageBox,
-                               QProgressBar, QPushButton, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QHBoxLayout, QLabel, QMainWindow, QMenu,
+                               QMessageBox, QProgressBar, QPushButton,
+                               QSlider, QStackedWidget, QVBoxLayout, QWidget)
 
 import mp4trim_updater as upd
 from mp4trim_core import *  # noqa: F401,F403
@@ -24,6 +25,80 @@ from mp4trim_workers import (Analyzer, FrameGrabber, Job, ProbeWorker,
                              ScrubEngine, SnapGrabber)
 from mp4trim_widgets import (SHORTCUTS_HELP, STYLE, SnapshotDialog,
                              SnapshotView, Timeline)
+
+# GlassPanel / AutoHider land in mp4trim_widgets; until then, develop against
+# minimal local stand-ins that implement the same contract (no animation).
+try:
+    from mp4trim_widgets import AutoHider, GlassPanel
+    GLASS_IS_STUB = False
+except ImportError:
+    GLASS_IS_STUB = True
+
+    class GlassPanel(QWidget):
+        """Fallback stand-in for mp4trim_widgets.GlassPanel (no fade)."""
+        visibility_changed = Signal(bool)
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._pinned = False
+            lay = QVBoxLayout(self)
+            lay.setContentsMargins(14, 10, 14, 10)
+            lay.setSpacing(6)
+            self.setAutoFillBackground(True)
+
+        def fade_in(self, ms: int = 160):
+            if not self.isVisible():
+                self.show()
+                self.visibility_changed.emit(True)
+
+        def fade_out(self, ms: int = 260):
+            if self._pinned:
+                return
+            if self.isVisible():
+                self.hide()
+                self.visibility_changed.emit(False)
+
+        def _get_pinned(self) -> bool:
+            return self._pinned
+
+        def _set_pinned(self, v: bool):
+            self._pinned = bool(v)
+
+        pinned = Property(bool, _get_pinned, _set_pinned)
+
+    class AutoHider(QObject):
+        """Fallback stand-in for mp4trim_widgets.AutoHider (never hides)."""
+
+        def __init__(self, window, panels, idle_ms=2000, cursor_target=None):
+            super().__init__(window)
+            self.panels = list(panels)
+            self.idle_ms = idle_ms
+            self.cursor_target = cursor_target
+            self.hide_cursor_when_idle = True
+            self._enabled = False
+
+        def set_enabled(self, on: bool):
+            self._enabled = bool(on)
+            if not on:
+                self.poke()
+
+        def poke(self):
+            for p in self.panels:
+                p.fade_in()
+
+
+class _TierCombo(QComboBox):
+    """QComboBox that reports when its popup is open (used to pin panels)."""
+    popup_open = Signal(bool)
+
+    def showPopup(self):
+        self.popup_open.emit(True)
+        super().showPopup()
+
+    def hidePopup(self):
+        super().hidePopup()
+        self.popup_open.emit(False)
+
 
 # ------------------------------------------------------------- main window
 
@@ -130,75 +205,128 @@ class Trimmer(QMainWindow):
         self.lbl_est.setTextFormat(Qt.RichText)
         self.lbl_est.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        row_a = QHBoxLayout()
-        row_a.setContentsMargins(12, 6, 12, 4)
-        row_a.setSpacing(6)
-        row_a.addWidget(self.btn_prev_vid)
-        row_a.addWidget(self.btn_next_vid)
-        row_a.addSpacing(10)
-        for w in (self.btn_go_in, self.btn_prev, self.btn_play, self.btn_next,
-                  self.btn_go_out):
-            row_a.addWidget(w)
-        row_a.addSpacing(10)
-        row_a.addWidget(self.btn_set_in)
-        row_a.addWidget(self.btn_set_out)
-        row_a.addSpacing(14)
-        row_a.addWidget(self.lbl_time)
-        row_a.addWidget(self.lbl_dur)
-        row_a.addStretch()
-        info_col = QVBoxLayout()
-        info_col.setSpacing(2)
-        info_col.addWidget(self.lbl_range)
-        info_col.addWidget(self.lbl_est)
-        row_a.addLayout(info_col)
+        # --- volume ---
+        self.btn_mute = btn("🔊", "Mute / unmute (M)", self.toggle_mute, "glass")
+        self.vol = QSlider(Qt.Horizontal)
+        self.vol.setObjectName("vol")
+        self.vol.setRange(0, 100)
+        self.vol.setFixedWidth(110)
+        self.vol.setFocusPolicy(Qt.NoFocus)
+        self.vol.setToolTip("Volume")
+        self.vol.valueChanged.connect(self._on_volume)
+        self.vol_slider = self.vol   # contract alias (tests, future UI work)
+        vol0 = int(self.settings.value("volume", 100))
+        muted0 = self.settings.value("muted", False, bool)
+        self.vol.setValue(min(max(vol0, 0), 100))
+        self.audio.setVolume(self.vol.value() / 100)
+        self.audio.setMuted(muted0)
+        self._sync_mute_icon()
 
-        # --- export row ---
+        # --- export controls ---
         self.btn_open = btn("📂 Open", "Open a video (Ctrl+O)", self.open_dialog)
-        lbl_tier = QLabel("Discord limit")
-        lbl_tier.setObjectName("muted")
-        self.combo_tier = QComboBox()
+        self.combo_tier = _TierCombo()
         self.combo_tier.setFocusPolicy(Qt.NoFocus)
         for name, mb in DISCORD_TIERS:
             self.combo_tier.addItem(name, mb)
         self.combo_tier.setToolTip("Target size for Discord MP4 and GIF exports")
         self.combo_tier.currentIndexChanged.connect(
             lambda i: self.set_discord_limit(self.combo_tier.itemData(i)))
-        self.btn_snap = btn("📷 Snapshot", "Grab + crop the current frame (S)",
+        self._combo_open = False
+        self._menu_open = False
+        self.combo_tier.popup_open.connect(self._on_combo_popup)
+        self.btn_snap = btn("📷 Snap", "Grab + crop the current frame (S)",
                             self.snapshot)
         self.btn_gif = btn("🎞 GIF", "Animated GIF sized for your Discord "
                            "limit (G)", self.export_gif)
-        self.btn_discord = btn("💬 Discord MP4",
-                               "Re-encode to fit your Discord limit (D)",
+        self.btn_discord = btn("💬 Discord",
+                               "Discord MP4: re-encode to fit your limit (D)",
                                self.export_discord, "discord")
-        self.btn_trim = btn("✂ Trim (lossless)",
-                            "Stream copy, original quality and size (Enter)",
+        self.btn_trim = btn("✂ Trim",
+                            "Lossless trim: stream copy, original quality (Enter)",
                             self.trim, "accent")
 
-        row_b = QHBoxLayout()
-        row_b.setContentsMargins(12, 4, 12, 12)
-        row_b.setSpacing(8)
-        row_b.addWidget(self.btn_open)
-        row_b.addStretch()
-        row_b.addWidget(lbl_tier)
-        row_b.addWidget(self.combo_tier)
-        row_b.addSpacing(8)
-        for w in (self.btn_snap, self.btn_gif, self.btn_discord, self.btn_trim):
-            row_b.addWidget(w)
-
+        # --- edge-to-edge video with floating glass panels on top ---
         root = QVBoxLayout()
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self.stack, stretch=1)
-        tl_wrap = QHBoxLayout()
-        tl_wrap.setContentsMargins(12, 8, 12, 0)
-        tl_wrap.addWidget(self.timeline)
-        root.addLayout(tl_wrap)
-        root.addLayout(row_a)
-        root.addLayout(row_b)
         host = QWidget()
         host.setLayout(root)
         self.setCentralWidget(host)
         self.setAcceptDrops(True)
+
+        # bottom panel: timeline on its own line, then transport | export row
+        self.bottom_panel = GlassPanel(host)
+        bl = QVBoxLayout()
+        bl.setSpacing(6)
+        if hasattr(self.bottom_panel, "set_content_layout"):
+            self.bottom_panel.set_content_layout(bl)
+        else:   # stub fallback
+            old = self.bottom_panel.layout()
+            if old is not None:
+                QWidget().setLayout(old)
+            bl.setContentsMargins(14, 10, 14, 10)
+            self.bottom_panel.setLayout(bl)
+        bl.addWidget(self.timeline)
+        # row 1: transport · marks · volume · time ········ range/estimate
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        for w in (self.btn_go_in, self.btn_prev, self.btn_play, self.btn_next,
+                  self.btn_go_out):
+            row.addWidget(w)
+        row.addSpacing(8)
+        row.addWidget(self.btn_set_in)
+        row.addWidget(self.btn_set_out)
+        row.addSpacing(10)
+        row.addWidget(self.btn_mute)
+        row.addWidget(self.vol)
+        row.addSpacing(10)
+        row.addWidget(self.lbl_time)
+        row.addWidget(self.lbl_dur)
+        row.addStretch()
+        info_col = QVBoxLayout()
+        info_col.setSpacing(2)
+        info_col.addWidget(self.lbl_range)
+        info_col.addWidget(self.lbl_est)
+        row.addLayout(info_col)
+        bl.addLayout(row)
+        # row 2: exports, right-aligned ····· tier · snap · gif · discord · trim
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.addStretch()
+        row2.addWidget(self.combo_tier)
+        row2.addSpacing(6)
+        for w in (self.btn_snap, self.btn_gif, self.btn_discord, self.btn_trim):
+            row2.addWidget(w)
+        bl.addLayout(row2)
+
+        # top panel: open / folder nav / clip name / update
+        self.top_panel = GlassPanel(host)
+        self.lbl_clip = QLabel("")
+        self.lbl_clip.setObjectName("muted")
+        top_row = QHBoxLayout()
+        top_row.setSpacing(6)
+        top_row.addWidget(self.btn_open)
+        top_row.addSpacing(8)
+        top_row.addWidget(self.btn_prev_vid)
+        top_row.addWidget(self.btn_next_vid)
+        top_row.addSpacing(10)
+        top_row.addWidget(self.lbl_clip)
+        top_row.addStretch()
+        if hasattr(self.top_panel, "set_content_layout"):
+            self.top_panel.set_content_layout(top_row)
+        else:   # stub fallback
+            old = self.top_panel.layout()
+            if old is not None:
+                QWidget().setLayout(old)
+            top_row.setContentsMargins(14, 8, 14, 8)
+            self.top_panel.setLayout(top_row)
+        self._top_row = top_row
+
+        # single/double click on the video toggles playback
+        for w in (self.stack, self.video, self.frame_label):
+            w.installEventFilter(self)
+        host.installEventFilter(self)   # relayout panels when host resizes
 
         # --- status bar: progress, cancel, show-in-folder ---
         self.progress = QProgressBar()
@@ -234,13 +362,130 @@ class Trimmer(QMainWindow):
         self.btn_update = btn("", "Install the downloaded update and restart "
                               "mp4trim", self.apply_update, "accent")
         self.btn_update.hide()
-        sb.addPermanentWidget(self.btn_update)
+        self._top_row.addWidget(self.btn_update)
         QTimer.singleShot(3000, lambda: self.check_updates(manual=False))
         self._update_timer = QTimer(self)
         self._update_timer.setInterval(24 * 60 * 60 * 1000)
         self._update_timer.timeout.connect(
             lambda: self.check_updates(manual=False))
         self._update_timer.start()
+
+        # --- auto-hide chrome (panels + menu bar + status bar) ---
+        self.hider = AutoHider(self, [self.top_panel, self.bottom_panel],
+                               idle_ms=2000, cursor_target=self.video)
+        self.hider.hide_cursor_when_idle = True
+        self.auto_hider = self.hider   # alias used by tests
+        self.hider.set_enabled(False)   # nothing loaded: keep chrome visible
+        self.bottom_panel.visibility_changed.connect(self._on_chrome_visible)
+        self._wire_menu_pins()
+
+        # fullscreen + mute shortcuts
+        self.addAction(self._act("Fullscreen", self.toggle_fullscreen, "F11"))
+        self.addAction(self._act("Exit fullscreen", self._esc_pressed, "Esc"))
+        self.addAction(self._act("Mute", self.toggle_mute, "M"))
+
+        QTimer.singleShot(0, self._relayout_panels)
+
+    # ------------------------------------------- glass panels / auto-hide
+
+    def _wire_menu_pins(self):
+        """Pin panels + keep chrome up while any menu is open."""
+        for m in self.menuBar().findChildren(QMenu):
+            m.aboutToShow.connect(lambda: self._set_menu_open(True))
+            m.aboutToHide.connect(lambda: self._set_menu_open(False))
+
+    def _set_menu_open(self, on: bool):
+        self._menu_open = on
+        self._update_pins()
+
+    def _on_combo_popup(self, on: bool):
+        self._combo_open = on
+        self._update_pins()
+
+    def _update_pins(self):
+        busy = self.job is not None
+        pin_bottom = busy or self._combo_open or self._menu_open
+        self.bottom_panel.pinned = pin_bottom
+        self.top_panel.pinned = self._menu_open
+        if pin_bottom or self._menu_open:
+            self.hider.poke()
+
+    def _on_chrome_visible(self, visible: bool):
+        """Menu + status bar follow the bottom panel's visibility."""
+        pinned_sb = (self.job is not None or self._update_msi is not None
+                     or self._menu_open)
+        self.menuBar().setVisible(visible or self._menu_open)
+        self.statusBar().setVisible(visible or pinned_sb)
+
+    def _place_panel(self, panel, x: int, y: int, w: int, h: int):
+        # The real GlassPanel slides via a QPropertyAnimation on 'pos' whose
+        # end value was captured before this relayout; stop it and resync the
+        # base position or the animation drags the panel back to (0, 0).
+        slide = getattr(panel, "_slide", None)
+        if slide is not None:
+            slide.stop()
+        panel.setGeometry(x, y, w, h)
+        if hasattr(panel, "_base_pos"):
+            panel._base_pos = panel.pos()
+
+    def _relayout_panels(self):
+        host = self.centralWidget()
+        if host is None or not hasattr(self, "bottom_panel"):
+            return
+        hw, hh = host.width(), host.height()
+        m = 16
+        bw = min(1240, hw - 2 * m)
+        bh = self.bottom_panel.sizeHint().height()
+        self._place_panel(self.bottom_panel, (hw - bw) // 2, hh - bh - m, bw, bh)
+        tw = min(max(self.top_panel.sizeHint().width(), 420), hw - 2 * m)
+        th = self.top_panel.sizeHint().height()
+        self._place_panel(self.top_panel, (hw - tw) // 2, m, tw, th)
+        self.bottom_panel.raise_()
+        self.top_panel.raise_()
+
+    # ------------------------------------------------------------- volume
+
+    def _on_volume(self, v: int):
+        self.audio.setVolume(v / 100)
+        self.settings.setValue("volume", int(v))
+
+    def toggle_mute(self):
+        self.audio.setMuted(not self.audio.isMuted())
+        self.settings.setValue("muted", self.audio.isMuted())
+        self._sync_mute_icon()
+
+    def _sync_mute_icon(self):
+        self.btn_mute.setText("🔇" if self.audio.isMuted() else "🔊")
+
+    # --------------------------------------------------------- fullscreen
+
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _esc_pressed(self):
+        if self.isFullScreen():
+            self.showNormal()
+
+    def eventFilter(self, obj, ev):
+        host = self.centralWidget()
+        if obj is host and ev.type() == QEvent.Resize:
+            self._relayout_panels()
+        elif obj in (self.stack, self.video, self.frame_label):
+            # single AND double click both play/pause; the second click of a
+            # double arrives as DblClick, which we swallow so the pair counts
+            # as one toggle, not two.
+            if ev.type() == QEvent.MouseButtonPress \
+                    and ev.button() == Qt.LeftButton:
+                self.hider.poke()
+                self.play_pause()
+                return True
+            if ev.type() == QEvent.MouseButtonDblClick \
+                    and ev.button() == Qt.LeftButton:
+                return True
+        return super().eventFilter(obj, ev)
 
     # ------------------------------------------------------------ updates
 
@@ -261,6 +506,8 @@ class Trimmer(QMainWindow):
         self._update_msi = msi
         self.btn_update.setText(f"⬆ Update to {version}")
         self.btn_update.show()
+        self.statusBar().show()
+        self._relayout_panels()
         self.statusBar().showMessage(
             f"mp4trim {version} is ready to install (you have {APP_VERSION})")
 
@@ -467,6 +714,11 @@ class Trimmer(QMainWindow):
         self.settings.setValue("last_dir", str(Path(path).parent))
         self._push_recent(path)
         self.setWindowTitle(f"mp4trim · {Path(path).name}")
+        vids, idx = self._siblings()
+        cpos = f"  ·  clip {idx + 1} of {len(vids)}" if idx >= 0 else ""
+        self.lbl_clip.setText(f"{Path(path).name}{cpos}")
+        self.hider.set_enabled(True)
+        self._relayout_panels()
         self._start_analyzer()
 
         self.fallback = self.act_ffpreview.isChecked()
@@ -739,8 +991,8 @@ class Trimmer(QMainWindow):
             return
         t_in, t_out = self.timeline.mark_in, self.timeline.mark_out
         keep = t_out - t_in
-        text = (f"IN {fmt_ms(t_in)}  OUT {fmt_ms(t_out)}  "
-                f"KEEP <b>{fmt_dur(keep)}</b>")
+        text = (f"IN {fmt_dur(t_in)} · OUT {fmt_dur(t_out)} · "
+                f"KEEP <b>{fmt_dur(keep)}</b>&nbsp;")
         if not self.act_reencode.isChecked() and self.keyframes:
             kf = keyframe_before(self.keyframes, t_in)
             if kf is not None and t_in - kf > 50:
@@ -798,6 +1050,9 @@ class Trimmer(QMainWindow):
         self.progress.show()
         self.btn_cancel.show()
         self.btn_reveal.hide()
+        self.statusBar().show()
+        self._update_pins()
+        self.hider.poke()
         self.update_controls()
         self.job.start()
 
@@ -807,6 +1062,7 @@ class Trimmer(QMainWindow):
         self.job = None
         self.progress.hide()
         self.btn_cancel.hide()
+        self._update_pins()
         self.update_controls()
 
     def _on_progress(self, frac: float, label: str):
