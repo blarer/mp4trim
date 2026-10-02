@@ -18,7 +18,7 @@ import mp4trim as m  # noqa: E402
 
 os.environ.pop("MP4TRIM_UPDATE_FEED", None)
 os.environ.pop("MP4TRIM_NO_UPDATE", None)
-m.APP_VERSION = "2.2.0"   # pretend we are the previous version
+m.APP_VERSION = "2.3.0"   # pretend we are the previous version
 
 app = QApplication(sys.argv)
 got = []
@@ -38,4 +38,4 @@ h = hashlib.sha256(path.read_bytes()).hexdigest()
 local = Path(__file__).resolve().parent.parent / "dist" / f"mp4trim-{ver}-win64.msi"
 h2 = hashlib.sha256(local.read_bytes()).hexdigest()
 print(f"downloaded v{ver}: {path.stat().st_size} bytes, sha match: {h == h2}")
-sys.exit(0 if ver == "2.3.0" and h == h2 else 1)
+sys.exit(0 if ver == "2.4.0" and h == h2 else 1)
