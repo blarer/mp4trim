@@ -1193,6 +1193,7 @@ class Trimmer(QMainWindow):
             self._prime = False
             self.player.pause()
         self.position = ms
+        self._apply_preview_rate(ms)
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.timeline.follow(ms)
         self.refresh_pos()
@@ -1594,6 +1595,7 @@ class Trimmer(QMainWindow):
 
     def _on_fx_win_closed(self, *_):
         self._fx_win = None
+        self._reset_preview_rate()
         sink = self._video_item.videoSink()
         if sink is not None:
             try:
@@ -1609,7 +1611,35 @@ class Trimmer(QMainWindow):
     def _on_fx_changed(self):
         if self.info:
             fxmod.save_fx(self.info.path, self.fx)
+        if self.fx.speed:
+            self._apply_preview_rate(self.position)
+        else:
+            self._reset_preview_rate()
         self.refresh_range()
+
+    def _apply_preview_rate(self, ms: int):
+        """While the FX editor is open, preview the speed ramp live:
+        playbackRate follows the keyframe curve (audio follows the rate).
+        Mute-slowed-spans is previewed too. Exports are exact; this is a
+        player-level approximation."""
+        if self._fx_win is None or not self.fx.speed:
+            return
+        rate = float(self.fx.speed.value_at(ms))
+        if abs(self.player.playbackRate() - rate) > 0.02:
+            self.player.setPlaybackRate(rate)
+        if self.fx.mute_slowed and not self.audio.isMuted() and rate < 0.999:
+            self._fx_preview_muted = True
+            self.audio.setMuted(True)
+        elif getattr(self, "_fx_preview_muted", False) and rate >= 0.999:
+            self._fx_preview_muted = False
+            self.audio.setMuted(False)
+
+    def _reset_preview_rate(self):
+        if self.player.playbackRate() != 1.0:
+            self.player.setPlaybackRate(1.0)
+        if getattr(self, "_fx_preview_muted", False):
+            self._fx_preview_muted = False
+            self.audio.setMuted(False)
 
     def _on_fx_video_frame(self, frame):
         """Mirror live player frames into the FX editor, ~15 fps max
