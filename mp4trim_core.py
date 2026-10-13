@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QApplication
 from mp4trim_fx import (FxState, build_speed_graph, crop_filter,
                         speed_segments)
 
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.2.0"
 UPDATE_REPO = "blarer/mp4trim"   # GitHub repo the auto-updater watches
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
 DISCORD_TIERS = [("Free · 20 MB", 20), ("Nitro Basic · 50 MB", 50),
