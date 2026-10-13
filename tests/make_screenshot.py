@@ -45,6 +45,10 @@ def pump(sec):
 end = time.time() + 60
 while len(w.timeline._thumb_ms) < 40 and time.time() < end:
     pump(0.1)
+# _finish_load re-enables the auto-hider (load is async), so disable it
+# again HERE or the panels fade out before the grab below
+if hasattr(w, "auto_hider"):
+    w.auto_hider.set_enabled(False)
 w.combo_tier.setCurrentIndex(1)
 w.timeline.mark_in, w.timeline.mark_out = 14_010, 36_000
 w.seek(22_500)

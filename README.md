@@ -35,6 +35,19 @@ background and shows an "Update to X" button in the status bar; one
 click installs it and restarts. Manual check: **Help -> Check for
 updates**. Set MP4TRIM_NO_UPDATE=1 to disable.
 
+<details>
+<summary><b>Environment flags</b> (debugging / testing)</summary>
+
+| Variable | Effect |
+| --- | --- |
+| `MP4TRIM_NO_UPDATE=1` | Skip the auto-update check entirely. |
+| `MP4TRIM_UPDATE_FEED=<url or file>` | Alternate release feed for the updater (tests use a local JSON file). |
+| `MP4TRIM_NO_NVENC=1` | Force the libx264 software encoder even on NVIDIA GPUs. |
+| `MP4TRIM_USE_PATH=1` | Ignore the bundled ffmpeg and use the one on `PATH`. |
+| `MP4TRIM_SETTINGS=<file.ini>` | Store settings (recents, volume, geometry, tier) in an ini file instead of the registry. The test suite sets this so runs never touch your real settings. |
+
+</details>
+
 Pick your tier (Free 20 MB, Nitro Basic 50 MB, Nitro 1 GB) in the
 **Discord limit** box. It is remembered between runs.
 
