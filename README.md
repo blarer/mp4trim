@@ -51,6 +51,28 @@ updates**. Set MP4TRIM_NO_UPDATE=1 to disable.
 Pick your tier (Free 20 MB, Nitro Basic 50 MB, Nitro 1 GB) in the
 **Discord limit** box. It is remembered between runs.
 
+## ✨ FX: speed ramps and crop/pan (3.2.0)
+
+Press **F** (or ✨ FX) to open the FX editor in its own window:
+
+- **Speed ramps** — keyframe playback speed from 25% to 400% along the
+  clip. Double-click the speed lane to drop a keyframe, drag it to re-time
+  or change speed, right-click for presets and interpolation (hold /
+  linear / ease). Audio follows with pitch-corrected `atempo`; a checkbox
+  mutes audio in slowed spans. Optional **HQ slow-mo** uses motion
+  interpolation (`minterpolate`) for smoother slow motion at the cost of a
+  much slower export.
+- **Crop / pan** — drag a crop window over the video and keyframe it so
+  the frame follows the action (think Sony Vegas pan/crop). Shrinking the
+  window zooms in; keyframes interpolate linearly or eased.
+
+FX apply to **Discord MP4**, **GIF**, and **Trim** exports (Trim switches
+to a re-encode when FX are active, since stream copy cannot apply
+filters). The range label shows the output duration live
+(`KEEP 8.0s → 12.4s ✨`), and size planning uses the ramped duration.
+Keyframes persist next to the clip in a `<name>.fx.json` sidecar, so
+reopening the clip restores them.
+
 ### How Discord MP4 picks quality
 
 The range label shows the plan live as you drag the handles, for example

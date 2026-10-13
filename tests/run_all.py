@@ -31,6 +31,7 @@ def main(argv):
         ("check_v21.py", 180, [clip]),
         ("check_glass.py", 180, [clip]),
         ("check_responsive.py", 180, [clip]),
+        ("check_fx.py", 300, [clip]),
         ("check_scrub.py", 300, [clip]),
         ("check_misc.py", 600, [clip]),
         ("ui_smoke.py", 300, [clip, shots]),

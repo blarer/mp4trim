@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
                                QSizePolicy, QSlider, QStackedWidget,
                                QVBoxLayout, QWidget)
 
+import mp4trim_fx as fxmod
 import mp4trim_updater as upd
 from mp4trim_core import *  # noqa: F401,F403
 from mp4trim_updater import UpdateChecker
@@ -249,6 +250,8 @@ class Trimmer(QMainWindow):
         self._analyzer: Analyzer | None = None
         self._load_gen = 0
         self._prober: ProbeWorker | None = None
+        self.fx = fxmod.FxState()
+        self._fx_win = None
         self._snapper: SnapGrabber | None = None
         self._threads: list[QThread] = []   # keep stopped threads alive
 
@@ -369,6 +372,8 @@ class Trimmer(QMainWindow):
         self.btn_discord = btn("💬 Discord",
                                "Discord MP4: re-encode to fit your limit (D)",
                                self.export_discord, "discord")
+        self.btn_fx = btn("✨ FX", "Keyframe speed ramps and "
+                          "crop/pan (F)", self.open_fx)
         self.btn_trim = btn("✂ Trim",
                             "Lossless trim: stream copy, original quality (Enter)",
                             self.trim, "accent")
@@ -427,7 +432,8 @@ class Trimmer(QMainWindow):
         row2.addStretch()
         row2.addWidget(self.combo_tier)
         row2.addSpacing(6)
-        for w in (self.btn_snap, self.btn_gif, self.btn_discord, self.btn_trim):
+        for w in (self.btn_fx, self.btn_snap, self.btn_gif,
+                  self.btn_discord, self.btn_trim):
             row2.addWidget(w)
         bl.addLayout(row2)
         bl.addWidget(self._status_bar)
@@ -899,6 +905,8 @@ class Trimmer(QMainWindow):
         m_file.addAction(self._act("Export &Discord MP4", self.export_discord, "D"))
         m_file.addAction(self._act("Export &GIF", self.export_gif, "G"))
         m_file.addAction(self._act("&Snapshot / Crop…", self.snapshot, "S"))
+        m_file.addAction(self._act("&FX editor (speed / crop)…",
+                                   self.open_fx, "F"))
         m_file.addSeparator()
         m_file.addAction(self._act("Show last export in folder", self.reveal_last))
         m_file.addSeparator()
@@ -1064,6 +1072,9 @@ class Trimmer(QMainWindow):
         self.frame_label.clear()
         self.frame_label.setText("")
         self.timeline.reset(info.duration_ms)
+        self.fx = fxmod.load_fx(path)
+        if self._fx_win is not None:
+            self._close_fx_win()
         self.settings.setValue("last_dir", str(Path(path).parent))
         self._push_recent(path)
         self.setWindowTitle(f"mp4trim · {Path(path).name}")
@@ -1272,6 +1283,11 @@ class Trimmer(QMainWindow):
                                      self.info.hdr)
 
     def _show_frame(self, img: QImage):
+        if self._fx_win is not None and not img.isNull():
+            try:
+                self._fx_win.set_frame(img)
+            except RuntimeError:
+                pass
         if self.fallback:
             self.frame_label.setPixmap(QPixmap.fromImage(img).scaled(
                 self.frame_label.size(), Qt.KeepAspectRatio,
@@ -1334,6 +1350,11 @@ class Trimmer(QMainWindow):
             b.setEnabled(loaded and not busy)
 
     def refresh_pos(self):
+        if self._fx_win is not None:
+            try:
+                self._fx_win.set_position(self.position)
+            except RuntimeError:
+                pass
         self.timeline.position = self.position
         self.timeline.update()
         self.lbl_time.setText(fmt_ms(self.position))
@@ -1346,8 +1367,15 @@ class Trimmer(QMainWindow):
             return
         t_in, t_out = self.timeline.mark_in, self.timeline.mark_out
         keep = t_out - t_in
+        out_ms = (self.fx.output_duration_ms(t_in, t_out)
+                  if self.fx.active else keep)
+        keep_txt = fmt_dur(keep)
+        if abs(out_ms - keep) > 40:
+            keep_txt += f" → {fmt_dur(out_ms)}"
         text = (f"IN {fmt_dur(t_in)} · OUT {fmt_dur(t_out)} · "
-                f"KEEP <b>{fmt_dur(keep)}</b>&nbsp;")
+                f"KEEP <b>{keep_txt}</b>&nbsp;")
+        if self.fx.active:
+            text += "<span style='color:#b388ff'>✨</span>&nbsp;"
         if not self.act_reencode.isChecked() and self.keyframes:
             kf = keyframe_before(self.keyframes, t_in)
             if kf is not None and t_in - kf > 50:
@@ -1357,7 +1385,7 @@ class Trimmer(QMainWindow):
 
         limit = self.discord_limit()
         lossless = lossless_mb(keep, self.info)
-        plan = plan_discord(keep, limit, self.info)
+        plan = plan_discord(out_ms, limit, self.info)
         parts = [f"Lossless ≈ {fmt_mb(lossless)}"]
         if plan.ok:
             parts.append(
@@ -1458,6 +1486,13 @@ class Trimmer(QMainWindow):
             return
         info, t_in, t_out = self.info, self.timeline.mark_in, self.timeline.mark_out
         accurate = self.act_reencode.isChecked()
+        if self.fx.active:
+            # FX always re-encodes; lossless stream copy cannot apply filters
+            dst = output_path(info.path, "fx", t_in, t_out, ".mp4")
+            fx = self.fx
+            self._start_job(lambda run: export_trim_fx(run, info, t_in, t_out,
+                                                       str(dst), fx), dst)
+            return
         dst = output_path(info.path, "trim", t_in, t_out, Path(info.path).suffix)
         self._start_job(lambda run: export_trim(run, info, t_in, t_out, str(dst),
                                                 accurate), dst)
@@ -1467,7 +1502,9 @@ class Trimmer(QMainWindow):
             return
         info, t_in, t_out = self.info, self.timeline.mark_in, self.timeline.mark_out
         limit = self.discord_limit()
-        plan = plan_discord(t_out - t_in, limit, info)
+        dur = (self.fx.output_duration_ms(t_in, t_out)
+               if self.fx.active else t_out - t_in)
+        plan = plan_discord(dur, limit, info)
         if not plan.ok:
             if QMessageBox.question(
                     self, "mp4trim",
@@ -1478,8 +1515,10 @@ class Trimmer(QMainWindow):
                 return
         mix = self.act_mix.isChecked()
         dst = output_path(info.path, f"discord{limit:g}mb", t_in, t_out, ".mp4")
+        fx = self.fx if self.fx.active else None
         self._start_job(lambda run: export_discord(run, info, t_in, t_out,
-                                                   str(dst), limit, mix), dst)
+                                                   str(dst), limit, mix,
+                                                   fx=fx), dst)
 
     def export_gif(self):
         if not self._range_ok():
@@ -1495,8 +1534,64 @@ class Trimmer(QMainWindow):
                     "Continue anyway?") != QMessageBox.StandardButton.Yes:
                 return
         dst = output_path(info.path, "clip", t_in, t_out, ".gif")
+        fx = self.fx if self.fx.active else None
         self._start_job(lambda run: export_gif(run, info, t_in, t_out, str(dst),
-                                               limit), dst)
+                                               limit, fx=fx), dst)
+
+    # ------------------------------------------------------------- FX
+
+    def open_fx(self):
+        if not self.info:
+            return
+        if self._fx_win is not None:
+            self._fx_win.raise_()
+            self._fx_win.activateWindow()
+            return
+        try:
+            from mp4trim_fxwin import FxWindow
+        except ImportError:
+            QMessageBox.information(self, "mp4trim",
+                                    "FX editor not available in this build.")
+            return
+        w = FxWindow(self.fx, self.info.duration_ms,
+                     (self.info.width, self.info.height), parent=None)
+        w.setAttribute(Qt.WA_DeleteOnClose, True)
+        w.changed.connect(self._on_fx_changed)
+        w.seek_requested.connect(self.seek)
+        w.destroyed.connect(self._on_fx_win_closed)
+        w.set_range(self.timeline.mark_in, self.timeline.mark_out)
+        w.set_position(self.position)
+        self.timeline.range_changed.connect(self._sync_fx_range)
+        self._fx_win = w
+        self._push_fx_frame()
+        w.show()
+
+    def _close_fx_win(self):
+        if self._fx_win is not None:
+            w, self._fx_win = self._fx_win, None
+            try:
+                w.close()
+            except RuntimeError:
+                pass
+
+    def _on_fx_win_closed(self, *_):
+        self._fx_win = None
+
+    def _sync_fx_range(self):
+        if self._fx_win is not None:
+            self._fx_win.set_range(self.timeline.mark_in,
+                                   self.timeline.mark_out)
+
+    def _on_fx_changed(self):
+        if self.info:
+            fxmod.save_fx(self.info.path, self.fx)
+        self.refresh_range()
+
+    def _push_fx_frame(self):
+        """Give the FX editor the frame under the playhead (async)."""
+        if self._fx_win is not None and self.info:
+            self.grabber.request(self.info.path, self.position,
+                                 self.info.hdr)
 
     def snapshot(self):
         if not self.info:
@@ -1528,6 +1623,7 @@ class Trimmer(QMainWindow):
     # ------------------------------------------------------------ closing
 
     def closeEvent(self, e):
+        self._close_fx_win()
         # invalidate in-flight async probes/snapshots; their slots
         # would otherwise touch widgets that Qt is tearing down
         self._load_gen += 1

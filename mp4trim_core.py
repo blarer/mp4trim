@@ -18,6 +18,9 @@ from PySide6.QtCore import QMimeData, QSettings, QUrl
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
+from mp4trim_fx import (FxState, build_speed_graph, crop_filter,
+                        speed_segments)
+
 APP_VERSION = "3.1.1"
 UPDATE_REPO = "blarer/mp4trim"   # GitHub repo the auto-updater watches
 # Discord limits are decimal megabytes; using 1e6 keeps us on the safe side.
@@ -341,11 +344,12 @@ def h264_encoder() -> str:
     return "h264_nvenc" if encoder_works("h264_nvenc") else "libx264"
 
 
-def video_chain(info: MediaInfo, height: int, fps: int) -> str:
+def video_chain(info: MediaInfo, height: int, fps: int,
+                skip_scale: bool = False) -> str:
     f = []
     if fps and info.fps and fps < info.fps - 0.5:
         f.append(f"fps={fps}")
-    if height < min(info.width, info.height):
+    if not skip_scale and height < min(info.width, info.height):
         f.append(f"scale=-2:{height}:flags=lanczos" if info.width >= info.height
                  else f"scale={height}:-2:flags=lanczos")
     if info.hdr:
@@ -354,20 +358,61 @@ def video_chain(info: MediaInfo, height: int, fps: int) -> str:
     return ",".join(f)
 
 
+def _fx_crop_size(fx: FxState, t_in: int, height: int) -> tuple[int, int]:
+    """Fixed output size for an FX crop: plan height, crop-rect aspect."""
+    x, y, w, h = fx.crop.value_at(t_in)
+    out_h = max(2, int(height) // 2 * 2)
+    out_w = max(2, int(round(out_h * (w / h))) // 2 * 2)
+    return out_w, out_h
+
+
+def _pad(label: str) -> str:
+    return label if ":" in label else f"[{label}]"
+
+
 def discord_args(info: MediaInfo, t_in: int, t_out: int, dst: str,
                  height: int, fps: int, v_kbps: int, a_kbps: int,
-                 mix_audio: bool, encoder: str) -> list[str]:
-    graph = f"[0:v:0]{video_chain(info, height, fps)}[v]"
-    amap: list[str] = []
-    if info.audio_tracks and a_kbps:
-        if mix_audio and info.audio_tracks > 1:
-            ins = "".join(f"[0:a:{i}]" for i in range(info.audio_tracks))
-            graph += f";{ins}amix=inputs={info.audio_tracks}:duration=longest[a]"
-            amap = ["-map", "[a]"]
-        else:
-            amap = ["-map", "0:a:0"]
+                 mix_audio: bool, encoder: str,
+                 fx: FxState | None = None) -> list[str]:
+    if fx is not None and not fx.active:
+        fx = None
+    if fx is None:
+        graph = f"[0:v:0]{video_chain(info, height, fps)}[v]"
+        amap: list[str] = []
+        if info.audio_tracks and a_kbps:
+            if mix_audio and info.audio_tracks > 1:
+                ins = "".join(f"[0:a:{i}]" for i in range(info.audio_tracks))
+                graph += f";{ins}amix=inputs={info.audio_tracks}:duration=longest[a]"
+                amap = ["-map", "[a]"]
+            else:
+                amap = ["-map", "0:a:0"]
+        vmap = ["-map", "[v]"]
+    else:
+        pre = ""
+        if fx.crop:
+            out_w, out_h = _fx_crop_size(fx, t_in, height)
+            pre = crop_filter(fx.crop, t_in, t_out, out_w, out_h)
+        vchain = video_chain(info, height, fps, skip_scale=bool(fx.crop))
+        parts = [f"[0:v:0]{','.join(p for p in (pre, vchain) if p)}[vc]"]
+        alabel = None
+        if info.audio_tracks and a_kbps:
+            if mix_audio and info.audio_tracks > 1:
+                ins = "".join(f"[0:a:{i}]" for i in range(info.audio_tracks))
+                parts.append(f"{ins}amix=inputs={info.audio_tracks}"
+                             f":duration=longest[a]")
+                alabel = "a"
+            else:
+                alabel = "0:a:0"
+        g, vout, aout = build_speed_graph(
+            "vc", alabel, speed_segments(fx.speed, t_in, t_out), t_in,
+            fx.mute_slowed, hq_fps=fps if fx.hq_interp else 0)
+        if g:
+            parts.append(g)
+        graph = ";".join(parts)
+        vmap = ["-map", _pad(vout)]
+        amap = ["-map", _pad(aout)] if aout is not None else []
     args = ["-ss", f"{t_in / 1000:.3f}", "-to", f"{t_out / 1000:.3f}",
-            "-i", info.path, "-filter_complex", graph, "-map", "[v]", *amap]
+            "-i", info.path, "-filter_complex", graph, *vmap, *amap]
     rate = ["-b:v", f"{v_kbps}k", "-maxrate", f"{int(v_kbps * 1.3)}k",
             "-bufsize", f"{v_kbps * 2}k"]
     if encoder == "h264_nvenc":
@@ -409,17 +454,91 @@ def trim_args(info: MediaInfo, t_in: int, t_out: int, dst: str,
     return args + v + ["-c:a", "copy", "-c:s", "copy", dst]
 
 
+def _accurate_video_codec(info: MediaInfo) -> list[str]:
+    """Accurate-trim encoder pick (shared with trim_fx_args)."""
+    if info.ten_bit or info.hdr:
+        if encoder_works("hevc_nvenc"):
+            v = ["-c:v", "hevc_nvenc", "-preset", "p6", "-rc", "vbr",
+                 "-cq", "18", "-b:v", "0", "-profile:v", "main10",
+                 "-pix_fmt", "p010le"]
+        else:
+            v = ["-c:v", "libx265", "-crf", "18", "-preset", "medium",
+                 "-pix_fmt", "yuv420p10le"]
+        return v + ["-tag:v", "hvc1"]
+    if encoder_works("h264_nvenc"):
+        return ["-c:v", "h264_nvenc", "-preset", "p6", "-rc", "vbr",
+                "-cq", "18", "-b:v", "0", "-profile:v", "high"]
+    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"]
+
+
+def trim_fx_args(info: MediaInfo, t_in: int, t_out: int, dst: str,
+                 fx: FxState) -> list[str]:
+    """Frame-accurate trim with the FX crop -> speed graph applied.
+    Audio is re-encoded (aac 192k): stream copy is impossible through a
+    filter graph."""
+    parts = []
+    vin = "0:v:0"
+    if fx.crop:
+        x, y, w, h = fx.crop.value_at(t_in)
+        out_w = max(2, int(w) // 2 * 2)
+        out_h = max(2, int(h) // 2 * 2)
+        parts.append(
+            f"[0:v:0]{crop_filter(fx.crop, t_in, t_out, out_w, out_h)}[vc]")
+        vin = "vc"
+    ain = "0:a:0" if info.audio_tracks else None
+    hq = round(info.fps) if (fx.hq_interp and info.fps) else 0
+    g, vout, aout = build_speed_graph(
+        vin, ain, speed_segments(fx.speed, t_in, t_out), t_in,
+        fx.mute_slowed, hq_fps=hq)
+    if g:
+        parts.append(g)
+    args = ["-ss", f"{t_in / 1000:.3f}", "-to", f"{t_out / 1000:.3f}",
+            "-i", info.path]
+    if parts:
+        args += ["-filter_complex", ";".join(parts), "-map", _pad(vout)]
+    else:
+        args += ["-map", "0:v:0"]
+    if aout is not None:
+        args += ["-map", _pad(aout)]
+    args += _accurate_video_codec(info)
+    args += ["-c:a", "aac", "-b:a", "192k"] if aout is not None else ["-an"]
+    return args + ["-sn", "-dn", "-movflags", "+faststart", dst]
+
+
 GIF_LADDER = [(480, 20), (480, 15), (400, 15), (360, 12),
               (320, 12), (280, 10), (240, 10)]
 GIF_HQ_LADDER = [(720, 24), (640, 24), (560, 20)]
 
 
 def gif_args(info: MediaInfo, t_in: int, t_out: int, dst: str,
-             width: int, fps: int) -> list[str]:
+             width: int, fps: int, fx: FxState | None = None) -> list[str]:
+    if fx is not None and not fx.active:
+        fx = None
     width = min(width, info.width or width)
-    pre = f"fps={fps},scale={width}:-2:flags=lanczos"
+    pre = f"fps={fps}"
+    if fx is not None and fx.crop:
+        # crop_filter scales (to width x height kept at crop aspect), so the
+        # gif chain skips its own scale step.
+        x, y, w, h = fx.crop.value_at(t_in)
+        out_w = max(2, min(width, int(w)) // 2 * 2)
+        out_h = max(2, int(round(out_w * (h / w))) // 2 * 2)
+        pre = (f"{crop_filter(fx.crop, t_in, t_out, out_w, out_h)},{pre}")
+    else:
+        pre += f",scale={width}:-2:flags=lanczos"
     if info.hdr:
         pre += f",{TONEMAP},format=yuv420p"
+    if fx is not None:
+        g, vout, _ = build_speed_graph(
+            "vg", None, speed_segments(fx.speed, t_in, t_out), t_in,
+            False, hq_fps=fps if fx.hq_interp else 0)
+        if g:
+            flt = (f"[0:v:0] {pre} [vg];{g};[{vout}]split [a][b];"
+                   f"[a] palettegen=stats_mode=diff [p];"
+                   f"[b][p] paletteuse=dither=bayer:bayer_scale=4"
+                   f":diff_mode=rectangle")
+            return ["-ss", f"{t_in / 1000:.3f}", "-to",
+                    f"{t_out / 1000:.3f}", "-i", info.path,
+                    "-filter_complex", flt, "-loop", "0", dst]
     flt = (f"[0:v:0] {pre},split [a][b];[a] palettegen=stats_mode=diff [p];"
            f"[b][p] paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle")
     return ["-ss", f"{t_in / 1000:.3f}", "-to", f"{t_out / 1000:.3f}",
@@ -431,8 +550,13 @@ def gif_args(info: MediaInfo, t_in: int, t_out: int, dst: str,
 # ffmpeg command with progress; tests pass a plain runner, the UI a Job.
 
 def export_discord(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
-                   limit_mb: float, mix_audio: bool):
-    plan = plan_discord(t_out - t_in, limit_mb, info)
+                   limit_mb: float, mix_audio: bool,
+                   fx: FxState | None = None):
+    if fx is not None and not fx.active:
+        fx = None
+    out_ms = (fx.output_duration_ms(t_in, t_out) if fx is not None
+              else t_out - t_in)
+    plan = plan_discord(out_ms, limit_mb, info)
     enc = h264_encoder()
     limit_bytes = limit_mb * 1e6
     v = plan.v_kbps
@@ -441,8 +565,8 @@ def export_discord(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
         label = (f"Discord MP4 · {plan.height}p{plan.fps} · {v / 1000:.1f} Mbps"
                  + (f" · retry {attempt}" if attempt else ""))
         run(discord_args(info, t_in, t_out, dst, plan.height, plan.fps, v,
-                         plan.a_kbps, mix_audio, enc),
-            (t_out - t_in) / 1000, label)
+                         plan.a_kbps, mix_audio, enc, fx=fx),
+            out_ms / 1000, label)
         size = os.path.getsize(dst)
         if size <= limit_bytes:
             return (dst, f"Discord MP4 saved + copied · {size / 1e6:.1f} MB · "
@@ -453,13 +577,17 @@ def export_discord(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
 
 
 def export_gif(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
-               limit_mb: float):
+               limit_mb: float, fx: FxState | None = None):
+    if fx is not None and not fx.active:
+        fx = None
+    out_ms = (fx.output_duration_ms(t_in, t_out) if fx is not None
+              else t_out - t_in)
     ladder = (GIF_HQ_LADDER + GIF_LADDER) if limit_mb > 20 else GIF_LADDER
     limit_bytes = limit_mb * 1e6
     size = 0
     for i, (width, fps) in enumerate(ladder, 1):
-        run(gif_args(info, t_in, t_out, dst, width, fps),
-            (t_out - t_in) / 1000,
+        run(gif_args(info, t_in, t_out, dst, width, fps, fx=fx),
+            out_ms / 1000,
             f"GIF pass {i}/{len(ladder)} · {width}px {fps}fps")
         size = os.path.getsize(dst)
         if size <= limit_bytes:
@@ -475,6 +603,15 @@ def export_trim(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
         "Re-encoding (frame-accurate)" if accurate else "Trimming (lossless)")
     size = os.path.getsize(dst)
     return dst, f"Trimmed + copied · {fmt_mb(size / 1e6)}", True
+
+
+def export_trim_fx(run, info: MediaInfo, t_in: int, t_out: int, dst: str,
+                   fx: FxState):
+    run(trim_fx_args(info, t_in, t_out, dst, fx),
+        fx.output_duration_ms(t_in, t_out) / 1000,
+        f"FX trim · {info.height}p")
+    size = os.path.getsize(dst)
+    return dst, f"FX export saved + copied · {size / 1e6:.1f} MB", True
 
 
 class Cancelled(Exception):

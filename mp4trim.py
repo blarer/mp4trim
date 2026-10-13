@@ -21,6 +21,8 @@ Keys:   Space play/pause   I / O set in/out   Home / End go to in/out
 
 from mp4trim_core import *  # noqa: F401,F403
 from mp4trim_core import _rate  # noqa: F401
+from mp4trim_fx import (FxState, FxTrack, load_fx, save_fx,  # noqa: F401
+                        sidecar_path)
 from mp4trim_workers import (Analyzer, FrameGrabber, Job, ProbeWorker,  # noqa: F401
                              ScrubEngine, SnapGrabber)
 from mp4trim_updater import (_ver_tuple, launch_update, pick_update,  # noqa: F401

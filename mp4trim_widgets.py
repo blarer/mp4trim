@@ -148,6 +148,7 @@ SHORTCUTS_HELP = """<table cellspacing=6>
 <tr><td><b>D</b></td><td>export Discord MP4</td></tr>
 <tr><td><b>G</b></td><td>export GIF</td></tr>
 <tr><td><b>S</b></td><td>snapshot / crop current frame</td></tr>
+<tr><td><b>F</b></td><td>FX editor: keyframe speed ramps &amp; crop/pan</td></tr>
 <tr><td><b>Ctrl+O</b></td><td>open (drag &amp; drop works too)</td></tr>
 </table>"""
 
