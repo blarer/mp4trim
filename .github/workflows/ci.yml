@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install PySide6 cx_Freeze
+
+      - name: Syntax + import check
+        run: |
+          python -m compileall -q mp4trim.py mp4trim_core.py mp4trim_workers.py mp4trim_updater.py mp4trim_widgets.py mp4trim_app.py
+          python -c "import mp4trim_core; print('core import ok, version', mp4trim_core.APP_VERSION)"
+
+      - name: Fetch ffmpeg
+        run: python fetch_ffmpeg.py
+
+      - name: Headless self-test
+        env:
+          MP4TRIM_NO_UPDATE: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: python mp4trim.py --selftest
+
+      - name: Build MSI
+        run: python setup.py bdist_msi
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp4trim-msi
+          path: dist/*.msi
+          if-no-files-found: error
