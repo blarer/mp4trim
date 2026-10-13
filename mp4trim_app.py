@@ -233,7 +233,7 @@ class Trimmer(QMainWindow):
         self._menu_bar.setNativeMenuBar(False)
         self._status_bar = QStatusBar()
         self._status_bar.setSizeGripEnabled(False)
-        self.settings = QSettings("mp4trim", "mp4trim")
+        self.settings = app_settings()
         geo = self.settings.value("geometry")
         if geo is None or not self.restoreGeometry(geo):
             self.resize(1240, 820)

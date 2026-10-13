@@ -14,12 +14,15 @@ Usage:
 """
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia*=false")
 os.environ["MP4TRIM_NO_UPDATE"] = "1"
+os.environ.setdefault("MP4TRIM_SETTINGS", os.path.join(
+    tempfile.mkdtemp(prefix="mp4trim-testset-"), "settings.ini"))
 
 from PySide6.QtWidgets import QApplication, QWidget
 import mp4trim as m

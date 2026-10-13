@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QUrl
+from PySide6.QtCore import QMimeData, QSettings, QUrl
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -54,6 +54,17 @@ def tool(name: str) -> str:
             if cand.is_file():
                 return str(cand)
     return shutil.which(name) or name
+
+
+def app_settings() -> QSettings:
+    """The app's persistent settings.
+
+    MP4TRIM_SETTINGS=<file.ini> redirects them to an ini file so tests
+    never touch (or clobber) the real per-user registry settings."""
+    custom = os.environ.get("MP4TRIM_SETTINGS")
+    if custom:
+        return QSettings(custom, QSettings.IniFormat)
+    return QSettings("mp4trim", "mp4trim")
 
 
 def have_ffmpeg() -> bool:

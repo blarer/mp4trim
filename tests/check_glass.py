@@ -17,6 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia*=false")
 os.environ["MP4TRIM_NO_UPDATE"] = "1"
+os.environ.setdefault("MP4TRIM_SETTINGS", os.path.join(
+    tempfile.mkdtemp(prefix="mp4trim-testset-"), "settings.ini"))
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QSettings, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
@@ -238,7 +240,7 @@ pump(0.3)
 
 # ---- (d, part 2) volume persisted to QSettings after close ----
 if vol is not None:
-    stored = QSettings("mp4trim", "mp4trim").value("volume")
+    stored = m.app_settings().value("volume")
     try:
         ok = stored is not None and abs(int(stored) - 37) <= 1
     except (TypeError, ValueError):

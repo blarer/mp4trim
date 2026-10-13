@@ -13,6 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+os.environ.setdefault("MP4TRIM_SETTINGS", os.path.join(
+    tempfile.mkdtemp(prefix="mp4trim-testset-"), "settings.ini"))
 import mp4trim as m  # noqa: E402
 
 fails = []

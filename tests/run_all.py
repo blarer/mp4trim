@@ -9,6 +9,7 @@ and prints an aligned PASS/FAIL table plus the tail of any failure.
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -42,6 +43,10 @@ def main(argv):
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env["MP4TRIM_NO_UPDATE"] = "1"
+    # isolate QSettings: a fresh ini per run keeps suites off the user's
+    # real registry settings (recents, volume, geometry)
+    env["MP4TRIM_SETTINGS"] = os.path.join(
+        tempfile.mkdtemp(prefix="mp4trim-testset-"), "settings.ini")
 
     results = []
     for script, timeout, extra in suites:
@@ -70,9 +75,16 @@ def main(argv):
 
     failed = [r for r in results if not r[1]]
     for script, _, _, out in failed:
-        tail = out.strip().splitlines()[-15:]
-        print(f"\n--- tail of {script} ---")
-        for line in tail:
+        lines = out.strip().splitlines()
+        # surface the actual failures first; ffmpeg banners bury them
+        marked = [ln for ln in lines
+                  if ln.startswith(("FAIL", "Traceback", "***"))
+                  or "Error" in ln]
+        print(f"\n--- failures in {script} ---")
+        for line in marked[:20]:
+            print(line)
+        print(f"--- tail of {script} ---")
+        for line in lines[-15:]:
             print(line)
     return 1 if failed else 0
 

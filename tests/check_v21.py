@@ -11,6 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["MP4TRIM_NO_UPDATE"] = "1"
+os.environ.setdefault("MP4TRIM_SETTINGS", os.path.join(
+    tempfile.mkdtemp(prefix="mp4trim-testset-"), "settings.ini"))
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -119,8 +121,20 @@ def pump(sec):
         time.sleep(0.01)
 
 
+def wait_clip(name, sec=15):
+    """Wait until the async probe finishes and `name` is the open clip."""
+    end = time.time() + sec
+    while time.time() < end:
+        app.processEvents()
+        if w.info is not None and Path(w.info.path).name == name:
+            pump(0.1)   # let queued signals (status text, buttons) settle
+            return True
+        time.sleep(0.01)
+    return False
+
+
 w.load(str(work / "b clip.mp4"))
-pump(0.5)
+check(wait_clip("b clip.mp4"), "async load of b clip.mp4 finished")
 if hasattr(w, "auto_hider"):  # keep glass panels visible for the assertions below
     w.auto_hider.set_enabled(False)
 vids, idx = w._siblings()
@@ -129,16 +143,16 @@ check([v.name for v in vids] == names and idx == 1,
 check("clip 2 of 3" in w.statusBar().currentMessage(),
       f"status shows position ({w.statusBar().currentMessage()!r})")
 w.step_video(1)
-pump(0.5)
+wait_clip("c clip.mp4")
 check(Path(w.info.path).name == "c clip.mp4", f"next -> {Path(w.info.path).name}")
 w.step_video(1)
 pump(0.2)
 check(Path(w.info.path).name == "c clip.mp4", "stays on last")
 check("Last video" in w.statusBar().currentMessage(), "end-of-folder notice")
 w.step_video(-1)
-pump(0.5)
+wait_clip("b clip.mp4")
 w.step_video(-1)
-pump(0.5)
+wait_clip("a clip.mp4")
 check(Path(w.info.path).name == "a clip.mp4", f"prev twice -> {Path(w.info.path).name}")
 check(w.btn_prev_vid.isEnabled() and w.btn_next_vid.isEnabled(), "nav buttons enabled")
 
