@@ -252,6 +252,7 @@ class Trimmer(QMainWindow):
         self._prober: ProbeWorker | None = None
         self.fx = fxmod.FxState()
         self._fx_win = None
+        self._fx_frame_ts = 0.0
         self._snapper: SnapGrabber | None = None
         self._threads: list[QThread] = []   # keep stopped threads alive
 
@@ -1181,6 +1182,11 @@ class Trimmer(QMainWindow):
 
     def on_play_state(self, state):
         self.btn_play.setText("⏸" if state == QMediaPlayer.PlayingState else "▶")
+        if self._fx_win is not None and hasattr(self._fx_win, "set_playing"):
+            try:
+                self._fx_win.set_playing(state == QMediaPlayer.PlayingState)
+            except RuntimeError:
+                pass
 
     def on_player_pos(self, ms: int):
         if self._prime:
@@ -1260,6 +1266,11 @@ class Trimmer(QMainWindow):
                 self.stack.setCurrentIndex(0)
 
     def _on_scrub_frame(self, ms: int, img: QImage):
+        if self._fx_win is not None and not img.isNull():
+            try:
+                self._fx_win.set_frame(img)
+            except RuntimeError:
+                pass
         # drop frames that arrive after the playhead moved a lot further
         if abs(ms - self.position) > 1000:
             return
@@ -1558,11 +1569,18 @@ class Trimmer(QMainWindow):
         w.setAttribute(Qt.WA_DeleteOnClose, True)
         w.changed.connect(self._on_fx_changed)
         w.seek_requested.connect(self.seek)
+        if hasattr(w, "play_toggled"):
+            w.play_toggled.connect(self.play_pause)
         w.destroyed.connect(self._on_fx_win_closed)
         w.set_range(self.timeline.mark_in, self.timeline.mark_out)
         w.set_position(self.position)
         self.timeline.range_changed.connect(self._sync_fx_range)
         self._fx_win = w
+        # live video: mirror the player's sink into the editor canvas so
+        # scrubbing/playing shows real frames under the crop rect
+        sink = self._video_item.videoSink()
+        if sink is not None:
+            sink.videoFrameChanged.connect(self._on_fx_video_frame)
         self._push_fx_frame()
         w.show()
 
@@ -1576,6 +1594,12 @@ class Trimmer(QMainWindow):
 
     def _on_fx_win_closed(self, *_):
         self._fx_win = None
+        sink = self._video_item.videoSink()
+        if sink is not None:
+            try:
+                sink.videoFrameChanged.disconnect(self._on_fx_video_frame)
+            except (RuntimeError, TypeError):
+                pass
 
     def _sync_fx_range(self):
         if self._fx_win is not None:
@@ -1586,6 +1610,23 @@ class Trimmer(QMainWindow):
         if self.info:
             fxmod.save_fx(self.info.path, self.fx)
         self.refresh_range()
+
+    def _on_fx_video_frame(self, frame):
+        """Mirror live player frames into the FX editor, ~15 fps max
+        (toImage() on 1440p frames is not free)."""
+        if self._fx_win is None or not frame.isValid():
+            return
+        import time as _t
+        now = _t.monotonic()
+        if now - self._fx_frame_ts < 0.066:
+            return
+        self._fx_frame_ts = now
+        img = frame.toImage()
+        if not img.isNull():
+            try:
+                self._fx_win.set_frame(img)
+            except RuntimeError:
+                pass
 
     def _push_fx_frame(self):
         """Give the FX editor the frame under the playhead (async)."""

@@ -654,6 +654,7 @@ class FxWindow(QWidget):
 
     changed = Signal()            # any edit
     seek_requested = Signal(int)  # user scrubbed inside the editor
+    play_toggled = Signal()       # user hit play/pause in the editor
 
     def __init__(self, fx: FxState, duration_ms: int,
                  video_size: tuple[int, int], parent=None):
@@ -687,8 +688,19 @@ class FxWindow(QWidget):
         self.lbl_rect = QLabel("")
         self.lbl_rect.setObjectName("muted")
 
+        self.btn_play = QPushButton("▶")
+        self.btn_play.setObjectName("play")
+        self.btn_play.setFixedWidth(44)
+        self.btn_play.setToolTip("Play / pause (Space)")
+        self.btn_play.clicked.connect(self.play_toggled)
+        self.lbl_pos = QLabel("0:00.000")
+        self.lbl_pos.setObjectName("est")
+
         crop_row = QHBoxLayout()
         crop_row.setSpacing(10)
+        crop_row.addWidget(self.btn_play)
+        crop_row.addWidget(self.lbl_pos)
+        crop_row.addSpacing(8)
         crop_row.addWidget(self.btn_add_kf)
         crop_row.addWidget(self.chk_follow)
         crop_row.addWidget(self.btn_clear_crop)
@@ -745,7 +757,13 @@ class FxWindow(QWidget):
         """App pushes the playhead (source ms)."""
         self._pos = min(max(int(ms), 0), self.duration)
         self.lane.set_position(self._pos)
+        m, rest = divmod(self._pos, 60_000)
+        self.lbl_pos.setText(f"{m}:{rest // 1000:02d}.{rest % 1000:03d}")
         self._sync_canvas_rect()
+
+    def set_playing(self, playing: bool):
+        """App reflects the player state on the editor's play button."""
+        self.btn_play.setText("⏸" if playing else "▶")
 
     def set_range(self, t_in: int, t_out: int):
         """App pushes the kept range markers."""
@@ -818,6 +836,8 @@ class FxWindow(QWidget):
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
             self.close()
+        elif e.key() == Qt.Key_Space:
+            self.play_toggled.emit()
         else:
             super().keyPressEvent(e)
 
