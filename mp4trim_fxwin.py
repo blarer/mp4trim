@@ -465,6 +465,8 @@ class SpeedLane(QWidget):
         hit = self._hit(pos)
         if hit:
             self._drag = [hit[0], hit[1].ms]
+            # jump to the keyframe so the video (and crop rect) show it
+            self.seeked.emit(int(hit[1].ms))
         else:
             self._drag = ["scrub"]
             self.seeked.emit(self._x_to_ms(pos.x()))
@@ -676,13 +678,15 @@ class FxWindow(QWidget):
         self.canvas.rect_changed.connect(self._on_rect_changed)
         self.canvas.rect_committed.connect(self._on_rect_committed)
 
-        self.btn_add_kf = QPushButton("Add crop keyframe at playhead")
+        self.btn_add_kf = QPushButton("◆ Keyframe crop here")
+        self.btn_add_kf.setToolTip(
+            "Save the current crop box as a keyframe at the playhead.\n"
+            "Dragging the box also keyframes automatically.")
         self.btn_add_kf.setObjectName("accent")
         self.btn_add_kf.clicked.connect(self.add_crop_keyframe)
         self.chk_follow = QCheckBox("Follow mode")
-        self.chk_follow.setToolTip(
-            "Every crop drag auto-sets/updates a crop keyframe\n"
-            "at the current playhead position.")
+        self.chk_follow.setChecked(True)
+        self.chk_follow.setVisible(False)   # drags always keyframe now
         self.btn_clear_crop = QPushButton("Clear crop")
         self.btn_clear_crop.clicked.connect(self.clear_crop)
         self.lbl_rect = QLabel("")
@@ -702,7 +706,6 @@ class FxWindow(QWidget):
         crop_row.addWidget(self.lbl_pos)
         crop_row.addSpacing(8)
         crop_row.addWidget(self.btn_add_kf)
-        crop_row.addWidget(self.chk_follow)
         crop_row.addWidget(self.btn_clear_crop)
         crop_row.addStretch()
         crop_row.addWidget(self.lbl_rect)
@@ -810,9 +813,10 @@ class FxWindow(QWidget):
 
     def _on_rect_committed(self, rect):
         self._on_rect_changed(rect)
-        if self.chk_follow.isChecked():
-            self.fx.crop.set_kf(self._pos, rect)
-            self._emit_changed()
+        # every finished drag keyframes at the playhead: what you see is
+        # what exports. (The old opt-in Follow mode silently dropped edits.)
+        self.fx.crop.set_kf(self._pos, rect)
+        self._emit_changed()
 
     def _on_mute(self, on: bool):
         self.fx.mute_slowed = bool(on)
