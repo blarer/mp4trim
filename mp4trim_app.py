@@ -12,7 +12,7 @@ from PySide6.QtCore import (Property, QEvent, QObject, QSettings, QSizeF,
                             Qt, QThread, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QAction, QColor, QFont, QIcon, QImage,
                            QKeySequence, QPixmap)
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
                                QGraphicsScene, QGraphicsView,
@@ -1579,9 +1579,12 @@ class Trimmer(QMainWindow):
         self._fx_win = w
         # live video: mirror the player's sink into the editor canvas so
         # scrubbing/playing shows real frames under the crop rect
-        sink = self._video_item.videoSink()
-        if sink is not None:
-            sink.videoFrameChanged.connect(self._on_fx_video_frame)
+        # the editor is THE player while open: route decoded frames to a
+        # dedicated sink (hiding the graphics item stalls delivery), so the
+        # main window goes black and only the editor shows video
+        self._fx_sink = QVideoSink(self)
+        self._fx_sink.videoFrameChanged.connect(self._on_fx_video_frame)
+        self.player.setVideoOutput(self._fx_sink)
         self._push_fx_frame()
         w.show()
 
@@ -1596,12 +1599,16 @@ class Trimmer(QMainWindow):
     def _on_fx_win_closed(self, *_):
         self._fx_win = None
         self._reset_preview_rate()
-        sink = self._video_item.videoSink()
-        if sink is not None:
+        # hand the video back to the main window
+        self.player.setVideoOutput(self._video_item)
+        if getattr(self, "_fx_sink", None) is not None:
             try:
-                sink.videoFrameChanged.disconnect(self._on_fx_video_frame)
+                self._fx_sink.videoFrameChanged.disconnect(
+                    self._on_fx_video_frame)
             except (RuntimeError, TypeError):
                 pass
+            self._fx_sink.deleteLater()
+            self._fx_sink = None
 
     def _sync_fx_range(self):
         if self._fx_win is not None:
